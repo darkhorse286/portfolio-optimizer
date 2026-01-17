@@ -1,0 +1,50 @@
+services:
+  # Main optimizer service
+  optimizer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: portfolio_optimizer
+    volumes:
+      - ./data:/app/data:ro
+      - ./results:/app/results:rw
+      - ./data/config:/app/config:ro
+    command: ./build/bin/portfolio_optimizer --config data/config/portfolio_config.json
+    environment:
+      - OMP_NUM_THREADS=4
+    networks:
+      - portfolio_net
+  # Visualization service
+  visualizer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: portfolio_visualizer
+    volumes:
+      - ./results:/app/results:rw
+      - ./scripts:/app/scripts:ro
+    command: python3 scripts/generate_report.py --results-dir results
+    depends_on:
+      - optimizer
+    networks:
+      - portfolio_net
+  
+  # Development environment (interactive)
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: portfolio_dev
+    volumes:
+      - .:/app:rw
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    networks:
+      - portfolio_net
+networks:
+  portfolio_net:
+    driver: bridge
+volumes:
+  results_data:
+    driver: local
