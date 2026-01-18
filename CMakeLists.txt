@@ -26,13 +26,13 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Find required packages
 find_package(Eigen3 REQUIRED NO_MODULE)
-find_package(nlohman_json REQUIRED NO_MODULE)
+find_package(nlohmann_json 3.11.3 REQUIRED)
 
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${EIGEN3_INCLUDE_DIR}
-    ${nlohman_json_INCLUDE_DIRS}
+    ${nlohmann_json_INCLUDE_DIRS}
 )
 
 # Collect source files
@@ -51,7 +51,7 @@ add_executable(portfolio_optimizer
 
 target_link_libraries(portfolio_optimizer
     Eigen3::Eigen
-    nlohman_json::nlohman_json
+    nlohmann_json::nlohmann_json
 )
 
 # Enable testing
@@ -75,7 +75,7 @@ if(TEST_SOURCES)
     add_executable(run_tests ${TEST_SOURCES} ${SOURCES})
     target_link_libraries(run_tests
         Eigen3::Eigen
-        nlohman_json::nlohman_json
+        nlohmann_json::nlohmann_json
         Catch2::Catch2WithMain
     )
     # Register tests with CTest
@@ -94,7 +94,7 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "Eigen3 version: ${EIGEN3_VERSION}")
-message(STATUS "nlohman_json version: ${nlohman_json_VERSION}")
+message(STATUS "nlohmann_json version: ${nlohmann_json_VERSION}")
 message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX} ")
 message(STATUS "=========================================")
 message(STATUS "")
