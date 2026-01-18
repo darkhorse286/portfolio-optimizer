@@ -71,7 +71,7 @@ namespace portfolio
          * @brief Get the full price matrix.
          * @return Reference to price matrix (dates x assets).
          */
-        const Eigen::MatrixXd &getPrices() const
+        const Eigen::MatrixXd &get_Prices() const
         {
             return prices_;
         }
