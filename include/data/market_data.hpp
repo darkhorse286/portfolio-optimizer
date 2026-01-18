@@ -44,13 +44,10 @@ namespace portfolio
     public:
         /**
          * @brief Constructor with dimensions.
-         * @param n_assets Number of assets.
-         * @param n_dates Number of time periods.
+         * @param num_dates Number of time periods.
+         * @param num_assets Number of assets.
          */
-
-        MarketData(const Eigen::MatrixXd &prices,
-                   const std::vector<std::string> &dates,
-                   const std::vector<std::string> &tickers);
+        MarketData(size_t num_dates, size_t num_assets);
 
         /**
          * @brief Constructor with data.
@@ -61,8 +58,8 @@ namespace portfolio
         MarketData(const Eigen::MatrixXd &prices,
                    const std::vector<std::string> &dates,
                    const std::vector<std::string> &tickers);
-
-        // Desctructor
+        
+        // Destructor
         ~MarketData() = default;
 
         /** ===========================================
