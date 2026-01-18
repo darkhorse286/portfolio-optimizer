@@ -51,6 +51,17 @@ namespace portfolio
         MarketData(const Eigen::MatrixXd &prices,
                    const std::vector<std::string> &dates,
                    const std::vector<std::string> &tickers);
+
+        /**
+         * @brief Constructor with data.
+         * @param prices Price matrix (dates x assets).
+         * @param dates Vector of date strings.
+         * @param tickers Vector of asset ticker symbols.
+         */
+        MarketData(const Eigen::MatrixXd &prices,
+                   const std::vector<std::string> &dates,
+                   const std::vector<std::string> &tickers);
+
         // Desctructor
         ~MarketData() = default;
 
