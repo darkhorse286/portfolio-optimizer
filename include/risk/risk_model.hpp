@@ -2,10 +2,12 @@
  * @file risk_model.hpp
  * @brief Abstract interface for covariance estimation methods
  *
- * Provides a common interface for different risk model estimation techniques used in portfolio optimization.
- * All risk models must implement the estimate_covariance method.
+ * Provides a common interface for different risk model estimation
+ * techniques used in portfolio optimization. All risk models must
+ * implement the estimate_covariance method.
  *
- * Thread Safety: Implementations are expected to be thread-safe for read-only operations.
+ * Thread Safety: Implementations are expected to be thread-safe for
+ * read-only operations.
  */
 
 #pragma once
@@ -18,6 +20,7 @@ namespace portfolio
 {
     namespace risk
     {
+
         /**
          * @class RiskModel
          * @brief Abstract base class for risk model estimation
@@ -31,7 +34,6 @@ namespace portfolio
          * Eigen::MatrixXd cov = risk_model->estimate_covariance(returns);
          * @endcode
          */
-
         class RiskModel
         {
         public:
@@ -39,16 +41,14 @@ namespace portfolio
 
             /**
              * @brief Estimate covariance matrix from return data
-             * @param returns Matrix of returns (rows = observations, cols=assets)
+             * @param returns Matrix of returns (rows = observations, cols = assets)
              * @return Covariance matrix (n_assets x n_assets)
              * @throws std::invalid_argument if returns matrix is empty
              * @throws std::runtime_error if computation fails
              *
              * @note The returned matrix is guaranteed to be symmetric
              * @note Matrix may not be positive definite for all estimators
-             *
              */
-
             virtual Eigen::MatrixXd estimate_covariance(
                 const Eigen::MatrixXd &returns) const = 0;
 
@@ -60,7 +60,6 @@ namespace portfolio
              *
              * Default implementation: Convert covariance to correlation
              */
-
             virtual Eigen::MatrixXd estimate_correlation(
                 const Eigen::MatrixXd &returns) const;
 
@@ -68,8 +67,7 @@ namespace portfolio
              * @brief Get the name of the risk model
              * @return String identifier for the model type
              */
-
-            virtual std::string name() const = 0;
+            virtual std::string get_name() const = 0;
 
         protected:
             /**
@@ -78,15 +76,16 @@ namespace portfolio
              * @throws std::invalid_argument if validation fails
              */
             static void validate_returns(const Eigen::MatrixXd &returns);
+
+            /**
+             * @brief Convert covariance matrix to correlation matrix
+             * @param covariance Input covariance matrix
+             * @return Correlation matrix
+             * @throws std::runtime_error if diagonal elements are non-positive
+             */
+            static Eigen::MatrixXd covariance_to_correlation(
+                const Eigen::MatrixXd &covariance);
         };
 
-        /**
-         * @brief Convert covariance matrix to correlation matrix
-         * @param covariance Input covariance matrix
-         * @return Correlation matrix
-         * @throws std::runtime_error if diagonal elements are non-positive
-         */
-        static Eigen::MatrixXd covariance_to_correlation(
-            const Eigen::MatrixXd &covariance);
-    }
-}
+    } // namespace risk
+} // namespace portfolio

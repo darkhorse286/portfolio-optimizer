@@ -54,16 +54,9 @@
   },
   
   "risk_model": {
-    "type": "sample_covariance",
+    "type": "ewma",
     "estimation_window": 252,
-    "min_periods": 60,
-    "method": "ewma",
-    "ewma_lambda": 0.94,
-    "shrinkage": {
-      "enabled": false,
-      "target": "constant_correlation",
-      "intensity": "auto"
-    }
+    "ewma_lambda": 0.94
   },
   
   "backtest": {
