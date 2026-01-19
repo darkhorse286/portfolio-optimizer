@@ -85,6 +85,18 @@ namespace portfolio
              */
             static Eigen::MatrixXd covariance_to_correlation(
                 const Eigen::MatrixXd &covariance);
+
+            /**
+             * @brief Ensure matrix is symmetric
+             * @param matrix Input matrix
+             * @return Symmetrized matrix: (M + M^T) / 2
+             *
+             * Utility to enforce exact symmetry, eliminating floating-point
+             * asymmetry from numerical operations.
+             *
+             * Time complexity: O(N^2)
+             */
+            static Eigen::MatrixXd ensure_symmetric(const Eigen::MatrixXd &matrix);
         };
 
     } // namespace risk
