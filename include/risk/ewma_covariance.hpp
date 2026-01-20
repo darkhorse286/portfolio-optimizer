@@ -43,11 +43,6 @@
  * which has become an industry standard for Value-at-Risk (VaR)
  * calculations.
  *
- * Performance: ~3ms for 100x100 matrix on modern CPU
- *
- * References:
- * - J.P. Morgan (1996), "RiskMetrics Technical Document"
- * - Zumbach (2006), "A Gentle Introduction to the RM 2006 Methodology"
  */
 
 #pragma once
@@ -193,10 +188,6 @@ namespace portfolio
              * of the number of observations. About 86% of the total weight comes
              * from the most recent N_eff observations.
              *
-             * Examples:
-             * - λ = 0.94 → N_eff = 16.67 observations
-             * - λ = 0.97 → N_eff = 33.33 observations
-             * - λ = 0.99 → N_eff = 100.0 observations
              */
             double get_effective_window() const { return 1.0 / (1.0 - lambda_); }
 
