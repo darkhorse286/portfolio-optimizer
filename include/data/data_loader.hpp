@@ -10,10 +10,12 @@
 #define DATA_LOADER_HPP
 
 #include "market_data.hpp"
+#include "risk/risk_model_factory.hpp" 
 #include <nlohmann/json.hpp>
 #include <string>
 #include <memory>
 #include <optional>
+
 
 namespace portfolio {
 
@@ -92,7 +94,7 @@ struct BacktestConfig {
 struct PortfolioConfig {
     DataConfig data;
     OptimizerConfig optimizer;
-    RiskModelConfig risk_model;
+    risk::RiskModelConfig risk_model;
     BacktestConfig backtest;
     
     /**

@@ -40,7 +40,10 @@ target_include_directories(data PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${EIGEN3_INCLUDE_DIR}
 )
-target_link_libraries(data PUBLIC Eigen3::Eigen)
+target_link_libraries(data PUBLIC 
+    Eigen3::Eigen
+    risk
+)
 
 if(nlohmann_json_FOUND)
     target_link_libraries(data PUBLIC nlohmann_json::nlohmann_json)
@@ -102,6 +105,7 @@ enable_testing()
 add_executable(test_data_loader tests/test_data_loader.cpp)
 target_link_libraries(test_data_loader PRIVATE 
     data
+    risk
     Catch2::Catch2WithMain
 )
 add_test(NAME DataLoader COMMAND test_data_loader)
