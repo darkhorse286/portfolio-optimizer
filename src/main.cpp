@@ -38,8 +38,8 @@ void print_usage(const char* program_name) {
 void print_banner() {
     std::cout << "\n"
               << "╔══════════════════════════════════════════════════════════════╗\n"
-              << "║       Quantum Portfolio Optimizer v1.0.0                    ║\n"
-              << "║       Modern C++17 Portfolio Optimization                   ║\n"
+              << "║       Quantum Portfolio Optimizer v1.0.0                     ║\n"
+              << "║       Modern C++17 Portfolio Optimization                    ║\n"
               << "╚══════════════════════════════════════════════════════════════╝\n"
               << std::endl;
 }
