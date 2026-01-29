@@ -27,7 +27,24 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(nlohmann_json 3.2.0 QUIET)
 if(NOT nlohmann_json_FOUND)
     message(STATUS "nlohmann/json not found, using system headers")
-    # Assume it's installed in system include path
+endif()
+
+# ====================
+# Risk Model Library
+# ====================
+file(GLOB_RECURSE RISK_SOURCES "src/risk/*.cpp")
+
+add_library(risk ${RISK_SOURCES})
+target_include_directories(risk PUBLIC 
+    ${CMAKE_SOURCE_DIR}/include
+    ${EIGEN3_INCLUDE_DIR}
+)
+target_link_libraries(risk PUBLIC 
+    Eigen3::Eigen
+)
+
+if(nlohmann_json_FOUND)
+    target_link_libraries(risk PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
 # =====================
@@ -49,22 +66,23 @@ if(nlohmann_json_FOUND)
     target_link_libraries(data PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
-# ====================
-# Risk Model Library
-# ====================
-file(GLOB_RECURSE RISK_SOURCES "src/risk/*.cpp")
+# =======================
+# Optimizer Library
+# =======================
+file(GLOB_RECURSE OPTIMIZER_SOURCES "src/optimizer/*.cpp")
 
-add_library(risk ${RISK_SOURCES})
-target_include_directories(risk PUBLIC 
+add_library(optimizer ${OPTIMIZER_SOURCES})
+target_include_directories(optimizer PUBLIC 
     ${CMAKE_SOURCE_DIR}/include
     ${EIGEN3_INCLUDE_DIR}
 )
-target_link_libraries(risk PUBLIC 
+target_link_libraries(optimizer PUBLIC 
     Eigen3::Eigen
+    risk
 )
 
 if(nlohmann_json_FOUND)
-    target_link_libraries(risk PUBLIC nlohmann_json::nlohmann_json)
+    target_link_libraries(optimizer PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
 # ===================
@@ -78,6 +96,7 @@ target_include_directories(portfolio_optimizer PRIVATE
 target_link_libraries(portfolio_optimizer PRIVATE 
     data
     risk
+    optimizer
     Eigen3::Eigen
 )
 
@@ -118,6 +137,15 @@ target_link_libraries(test_risk_models PRIVATE
 )
 add_test(NAME RiskModels COMMAND test_risk_models)
 
+# Optimizer tests (placeholder for next step)
+# add_executable(test_optimizer tests/test_optimizer.cpp)
+# target_link_libraries(test_optimizer PRIVATE 
+#     optimizer
+#     risk
+#     Catch2::Catch2WithMain
+# )
+# add_test(NAME Optimizer COMMAND test_optimizer)
+
 # Convenience target to run all tests
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
@@ -141,5 +169,9 @@ message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Eigen3 version: ${Eigen3_VERSION}")
 message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "Libraries:")
+message(STATUS "  - Data layer: ENABLED")
+message(STATUS "  - Risk models: ENABLED")
+message(STATUS "  - Optimizer: ENABLED")
 message(STATUS "=============================")
 message(STATUS "")
