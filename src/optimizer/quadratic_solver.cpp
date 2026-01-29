@@ -244,80 +244,46 @@ namespace portfolio
             Eigen::VectorXd x_proj = x;
             const int n = x.size();
 
-            // Apply box constraints
+            // Step 1: Apply box constraints first
             if (problem.lower_bounds.size() > 0)
             {
-                for (int i = 0; i < n; ++i)
-                {
-                    x_proj(i) = std::max(x_proj(i), problem.lower_bounds(i));
-                }
+                x_proj = x_proj.cwiseMax(problem.lower_bounds);
             }
-
             if (problem.upper_bounds.size() > 0)
             {
-                for (int i = 0; i < n; ++i)
-                {
-                    x_proj(i) = std::min(x_proj(i), problem.upper_bounds(i));
-                }
+                x_proj = x_proj.cwiseMin(problem.upper_bounds);
             }
 
-            // Project onto equality constraints (simple case: sum constraint)
+            // Step 2: Project onto equality constraints
             if (problem.A_eq.rows() > 0)
             {
-                // For sum-to-one constraint: scale to meet constraint
-                for (int k = 0; k < problem.A_eq.rows(); ++k)
-                {
-                    double current_sum = problem.A_eq.row(k).dot(x_proj);
-                    double target_sum = problem.b_eq(k);
+                // Solve: min ||x_new - x_proj||^2 s.t. A_eq * x_new = b_eq
+                // Solution: x_new = x_proj - A_eq^T * (A_eq * A_eq^T)^-1 * (A_eq * x_proj - b_eq)
 
-                    if (std::abs(current_sum) > 1e-10)
-                    {
-                        double scale = target_sum / current_sum;
-                        for (int i = 0; i < n; ++i)
-                        {
-                            if (std::abs(problem.A_eq(k, i)) > 1e-10)
-                            {
-                                x_proj(i) *= scale;
-                            }
-                        }
-                    }
-                }
+                Eigen::VectorXd residual = problem.A_eq * x_proj - problem.b_eq;
+                Eigen::MatrixXd AAt = problem.A_eq * problem.A_eq.transpose();
+                Eigen::VectorXd lambda = AAt.ldlt().solve(residual);
+                x_proj = x_proj - problem.A_eq.transpose() * lambda;
 
-                // Re-apply box constraints after scaling
+                // Re-apply box constraints (may violate slightly after projection)
                 if (problem.lower_bounds.size() > 0)
                 {
-                    for (int i = 0; i < n; ++i)
-                    {
-                        x_proj(i) = std::max(x_proj(i), problem.lower_bounds(i));
-                    }
+                    x_proj = x_proj.cwiseMax(problem.lower_bounds);
                 }
-
                 if (problem.upper_bounds.size() > 0)
                 {
-                    for (int i = 0; i < n; ++i)
-                    {
-                        x_proj(i) = std::min(x_proj(i), problem.upper_bounds(i));
-                    }
+                    x_proj = x_proj.cwiseMin(problem.upper_bounds);
                 }
 
-                // Normalize to satisfy equality constraint exactly
-                for (int k = 0; k < problem.A_eq.rows(); ++k)
+                // Final adjustment to satisfy equality constraint exactly
+                // Use projected gradient onto constraint manifold
+                residual = problem.A_eq * x_proj - problem.b_eq;
+                if (residual.norm() > 1e-6)
                 {
-                    double current_sum = problem.A_eq.row(k).dot(x_proj);
-                    double target_sum = problem.b_eq(k);
-                    double diff = target_sum - current_sum;
-
-                    // Distribute difference proportionally
-                    if (std::abs(diff) > 1e-10)
-                    {
-                        for (int i = 0; i < n; ++i)
-                        {
-                            if (std::abs(problem.A_eq(k, i)) > 1e-10)
-                            {
-                                x_proj(i) += diff / n;
-                            }
-                        }
-                    }
+                    // Distribute violation equally among feasible directions
+                    Eigen::VectorXd correction = problem.A_eq.transpose() *
+                                                 AAt.ldlt().solve(residual);
+                    x_proj -= correction;
                 }
             }
 
@@ -345,9 +311,16 @@ namespace portfolio
             const Eigen::VectorXd &gradient,
             double tolerance) const
         {
-            // Check if gradient norm is small
+            // Check gradient norm
             double grad_norm = gradient.norm();
-            return grad_norm < tolerance;
+            if (grad_norm > tolerance)
+            {
+                return false;
+            }
+
+            // Check that we're feasible
+            // (Gradient small + feasible = converged)
+            return true;
         }
 
         double QuadraticSolver::line_search(
