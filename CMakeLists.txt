@@ -137,21 +137,23 @@ target_link_libraries(test_risk_models PRIVATE
 )
 add_test(NAME RiskModels COMMAND test_risk_models)
 
-# Optimizer tests (placeholder for next step)
-# add_executable(test_optimizer tests/test_optimizer.cpp)
-# target_link_libraries(test_optimizer PRIVATE 
-#     optimizer
-#     risk
-#     Catch2::Catch2WithMain
-# )
-# add_test(NAME Optimizer COMMAND test_optimizer)
+# Optimizer tests
+add_executable(test_mean_variance_optimizer tests/test_mean_variance_optimizer.cpp)
+target_link_libraries(test_mean_variance_optimizer PRIVATE 
+    optimizer
+    risk
+    data
+    Catch2::Catch2WithMain
+)
+add_test(NAME MeanVarianceOptimizer COMMAND test_mean_variance_optimizer)
 
-# Convenience target to run all tests
+# Update run_tests target
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_data_loader test_risk_models
+    DEPENDS test_data_loader test_risk_models test_mean_variance_optimizer
     COMMENT "Running all tests..."
 )
+
 
 # ========================
 # Installation (optional)
