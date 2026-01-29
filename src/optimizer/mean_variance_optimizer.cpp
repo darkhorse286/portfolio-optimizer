@@ -149,8 +149,9 @@ namespace portfolio
             // Solve
             QuadraticSolver solver;
             SolverOptions options;
-            options.max_iterations = 1000;
-            options.tolerance = 1e-6;
+            options.max_iterations = 5000; 
+            options.tolerance = 1e-4;      
+            options.step_size = 0.01;      
             solver.set_options(options);
 
             SolverResult solver_result = solver.solve(problem);
@@ -264,8 +265,9 @@ namespace portfolio
             // Solve
             QuadraticSolver solver;
             SolverOptions options;
-            options.max_iterations = 1000;
-            options.tolerance = 1e-6;
+            options.max_iterations = 5000; 
+            options.tolerance = 1e-4;      
+            options.step_size = 0.01;      
             solver.set_options(options);
 
             SolverResult solver_result = solver.solve(problem);
@@ -310,8 +312,9 @@ namespace portfolio
             // Solve
             QuadraticSolver solver;
             SolverOptions options;
-            options.max_iterations = 1000;
-            options.tolerance = 1e-6;
+            options.max_iterations = 5000; 
+            options.tolerance = 1e-4;      
+            options.step_size = 0.01;      
             solver.set_options(options);
 
             SolverResult solver_result = solver.solve(problem);
