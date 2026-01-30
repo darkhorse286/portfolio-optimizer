@@ -23,6 +23,20 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Find required packages
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
+find_library(OSQP_LIBRARY 
+    NAMES osqp 
+    PATHS /usr/local/lib /usr/lib
+    REQUIRED
+)
+find_path(OSQP_INCLUDE_DIR 
+    NAMES osqp/osqp.h 
+    PATHS /usr/local/include /usr/include
+    REQUIRED
+)
+
+message(STATUS "Found OSQP library: ${OSQP_LIBRARY}")
+message(STATUS "Found OSQP include: ${OSQP_INCLUDE_DIR}")
+
 # nlohmann/json - header-only library
 find_package(nlohmann_json 3.2.0 QUIET)
 if(NOT nlohmann_json_FOUND)
@@ -75,10 +89,12 @@ add_library(optimizer ${OPTIMIZER_SOURCES})
 target_include_directories(optimizer PUBLIC 
     ${CMAKE_SOURCE_DIR}/include
     ${EIGEN3_INCLUDE_DIR}
+    ${OSQP_INCLUDE_DIR}  # Add this line
 )
 target_link_libraries(optimizer PUBLIC 
     Eigen3::Eigen
     risk
+    ${OSQP_LIBRARY}  # Add this line
 )
 
 if(nlohmann_json_FOUND)

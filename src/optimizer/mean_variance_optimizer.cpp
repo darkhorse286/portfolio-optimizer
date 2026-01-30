@@ -6,6 +6,7 @@
 #include "optimizer/mean_variance_optimizer.hpp"
 #include <cmath>
 #include <iostream>
+#include "optimizer/osqp_solver.hpp"
 
 namespace portfolio
 {
@@ -147,11 +148,10 @@ namespace portfolio
             problem.upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
 
             // Solve
-            QuadraticSolver solver;
+            OSQPSolver solver;
             SolverOptions options;
             options.max_iterations = 10000; 
-            options.tolerance = 1e-3;      
-            options.step_size = 1.0;      
+            options.tolerance = 1e-6;          
             solver.set_options(options);
 
             SolverResult solver_result = solver.solve(problem);
@@ -263,7 +263,7 @@ namespace portfolio
             problem.upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
 
             // Solve
-            QuadraticSolver solver;
+            OSQPSolver solver;
             SolverOptions options;
             options.max_iterations = 10000; 
             options.tolerance = 1e-3;      
@@ -310,7 +310,7 @@ namespace portfolio
             problem.upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
 
             // Solve
-            QuadraticSolver solver;
+            OSQPSolver solver;
             SolverOptions options;
             options.max_iterations = 10000; 
             options.tolerance = 1e-3;      
