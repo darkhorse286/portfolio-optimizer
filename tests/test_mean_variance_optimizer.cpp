@@ -398,7 +398,7 @@ TEST_CASE_METHOD(OptimizerTestFixture, "Risk aversion optimization",
 TEST_CASE("Real market data convergence", "[MeanVarianceOptimizer][Integration]")
 {
     // Load configuration and data
-    auto config = DataLoader::load_config("data/config/portfolio_config.json");
+    auto config = DataLoader::load_config("../data/config/portfolio_config.json");
     
     // Load a subset of data for faster testing
     std::vector<std::string> test_tickers = {"AAPL", "MSFT", "JPM", "JNJ", "XOM"};
