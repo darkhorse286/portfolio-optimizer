@@ -23,11 +23,42 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Find required packages
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
+find_library(OSQP_LIBRARY 
+    NAMES osqp 
+    PATHS /usr/local/lib /usr/lib
+    REQUIRED
+)
+find_path(OSQP_INCLUDE_DIR 
+    NAMES osqp/osqp.h 
+    PATHS /usr/local/include /usr/include
+    REQUIRED
+)
+
+message(STATUS "Found OSQP library: ${OSQP_LIBRARY}")
+message(STATUS "Found OSQP include: ${OSQP_INCLUDE_DIR}")
+
 # nlohmann/json - header-only library
 find_package(nlohmann_json 3.2.0 QUIET)
 if(NOT nlohmann_json_FOUND)
     message(STATUS "nlohmann/json not found, using system headers")
-    # Assume it's installed in system include path
+endif()
+
+# ====================
+# Risk Model Library
+# ====================
+file(GLOB_RECURSE RISK_SOURCES "src/risk/*.cpp")
+
+add_library(risk ${RISK_SOURCES})
+target_include_directories(risk PUBLIC 
+    ${CMAKE_SOURCE_DIR}/include
+    ${EIGEN3_INCLUDE_DIR}
+)
+target_link_libraries(risk PUBLIC 
+    Eigen3::Eigen
+)
+
+if(nlohmann_json_FOUND)
+    target_link_libraries(risk PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
 # =====================
@@ -49,22 +80,25 @@ if(nlohmann_json_FOUND)
     target_link_libraries(data PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
-# ====================
-# Risk Model Library
-# ====================
-file(GLOB_RECURSE RISK_SOURCES "src/risk/*.cpp")
+# =======================
+# Optimizer Library
+# =======================
+file(GLOB_RECURSE OPTIMIZER_SOURCES "src/optimizer/*.cpp")
 
-add_library(risk ${RISK_SOURCES})
-target_include_directories(risk PUBLIC 
+add_library(optimizer ${OPTIMIZER_SOURCES})
+target_include_directories(optimizer PUBLIC 
     ${CMAKE_SOURCE_DIR}/include
     ${EIGEN3_INCLUDE_DIR}
+    ${OSQP_INCLUDE_DIR}  # Add this line
 )
-target_link_libraries(risk PUBLIC 
+target_link_libraries(optimizer PUBLIC 
     Eigen3::Eigen
+    risk
+    ${OSQP_LIBRARY}  # Add this line
 )
 
 if(nlohmann_json_FOUND)
-    target_link_libraries(risk PUBLIC nlohmann_json::nlohmann_json)
+    target_link_libraries(optimizer PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
 # ===================
@@ -78,6 +112,7 @@ target_include_directories(portfolio_optimizer PRIVATE
 target_link_libraries(portfolio_optimizer PRIVATE 
     data
     risk
+    optimizer
     Eigen3::Eigen
 )
 
@@ -118,12 +153,23 @@ target_link_libraries(test_risk_models PRIVATE
 )
 add_test(NAME RiskModels COMMAND test_risk_models)
 
-# Convenience target to run all tests
+# Optimizer tests
+add_executable(test_mean_variance_optimizer tests/test_mean_variance_optimizer.cpp)
+target_link_libraries(test_mean_variance_optimizer PRIVATE 
+    optimizer
+    risk
+    data
+    Catch2::Catch2WithMain
+)
+add_test(NAME MeanVarianceOptimizer COMMAND test_mean_variance_optimizer)
+
+# Update run_tests target
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_data_loader test_risk_models
+    DEPENDS test_data_loader test_risk_models test_mean_variance_optimizer
     COMMENT "Running all tests..."
 )
+
 
 # ========================
 # Installation (optional)
@@ -141,5 +187,9 @@ message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Eigen3 version: ${Eigen3_VERSION}")
 message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "Libraries:")
+message(STATUS "  - Data layer: ENABLED")
+message(STATUS "  - Risk models: ENABLED")
+message(STATUS "  - Optimizer: ENABLED")
 message(STATUS "=============================")
 message(STATUS "")
