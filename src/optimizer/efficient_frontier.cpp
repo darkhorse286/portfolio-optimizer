@@ -6,6 +6,7 @@
 #include "optimizer/efficient_frontier.hpp"
 #include <algorithm>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <iomanip>
 #include <cmath>
@@ -127,6 +128,13 @@ namespace portfolio
 
         void EfficientFrontierResult::export_to_csv(const std::string &filepath) const
         {
+            // Create parent directory if it doesn't exist
+            std::filesystem::path path(filepath);
+            if (path.has_parent_path())
+            {
+                std::filesystem::create_directories(path.parent_path());
+            }
+
             std::ofstream file(filepath);
             if (!file.is_open())
             {
