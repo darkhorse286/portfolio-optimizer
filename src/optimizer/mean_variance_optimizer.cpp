@@ -4,9 +4,11 @@
  */
 
 #include "optimizer/mean_variance_optimizer.hpp"
-#include <cmath>
-#include <iostream>
 #include "optimizer/osqp_solver.hpp"
+#include <stdexcept>
+#include <cmath>
+#include <limits>
+#include <algorithm>
 
 namespace portfolio
 {
@@ -36,28 +38,31 @@ namespace portfolio
 
         nlohmann::json MeanVarianceOptimizer::get_parameters() const
         {
+            nlohmann::json params;
+            params["optimizer_type"] = "MeanVariance";
+            params["risk_free_rate"] = risk_free_rate_;
+            params["risk_aversion"] = risk_aversion_;
+            params["target_return"] = target_return_;
+
             std::string obj_str;
             switch (objective_)
             {
             case ObjectiveType::MIN_VARIANCE:
-                obj_str = "min_variance";
+                obj_str = "MIN_VARIANCE";
                 break;
             case ObjectiveType::MAX_SHARPE:
-                obj_str = "max_sharpe";
+                obj_str = "MAX_SHARPE";
                 break;
             case ObjectiveType::TARGET_RETURN:
-                obj_str = "target_return";
+                obj_str = "TARGET_RETURN";
                 break;
             case ObjectiveType::RISK_AVERSION:
-                obj_str = "risk_aversion";
+                obj_str = "RISK_AVERSION";
                 break;
             }
+            params["objective"] = obj_str;
 
-            return nlohmann::json{
-                {"objective", obj_str},
-                {"risk_free_rate", risk_free_rate_},
-                {"risk_aversion", risk_aversion_},
-                {"target_return", target_return_}};
+            return params;
         }
 
         void MeanVarianceOptimizer::set_risk_aversion(double lambda)
@@ -102,6 +107,16 @@ namespace portfolio
             constraints.validate();
             validate_parameters();
 
+            // Validate current_weights dimensions if provided
+            if (current_weights.size() > 0 &&
+                current_weights.size() != static_cast<Eigen::Index>(expected_returns.size()))
+            {
+                throw std::invalid_argument(
+                    "current_weights size (" + std::to_string(current_weights.size()) +
+                    ") does not match number of assets (" +
+                    std::to_string(expected_returns.size()) + ")");
+            }
+
             // Route to appropriate optimizer based on objective
             switch (objective_)
             {
@@ -143,15 +158,15 @@ namespace portfolio
                 problem.b_eq = Eigen::VectorXd::Ones(1);
             }
 
-            // Box constraints
-            problem.lower_bounds = Eigen::VectorXd::Constant(n, constraints.min_weight);
-            problem.upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
+            // Box constraints intersected with per-asset turnover
+            compute_turnover_bounds(n, constraints, current_weights,
+                                    problem.lower_bounds, problem.upper_bounds);
 
             // Solve
             OSQPSolver solver;
             SolverOptions options;
-            options.max_iterations = 10000; 
-            options.tolerance = 1e-6;          
+            options.max_iterations = 10000;
+            options.tolerance = 1e-6;
             solver.set_options(options);
 
             SolverResult solver_result = solver.solve(problem);
@@ -193,7 +208,9 @@ namespace portfolio
             OptimizationResult best_result;
 
             // Try different risk aversion levels
-            std::vector<double> lambdas = {0.1, 0.5, 1.0, 2.0, 5.0, 10.0};
+            std::vector<double> lambdas = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+                                           1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0,
+                                           8.0, 9.0, 10.0, 15.0, 20.0};
 
             for (double lambda : lambdas)
             {
@@ -258,16 +275,16 @@ namespace portfolio
             problem.A_eq.row(row) = expected_returns.transpose();
             problem.b_eq(row) = target_return_;
 
-            // Box constraints
-            problem.lower_bounds = Eigen::VectorXd::Constant(n, constraints.min_weight);
-            problem.upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
+            // Box constraints intersected with per-asset turnover
+            compute_turnover_bounds(n, constraints, current_weights,
+                                    problem.lower_bounds, problem.upper_bounds);
 
             // Solve
             OSQPSolver solver;
             SolverOptions options;
-            options.max_iterations = 10000; 
-            options.tolerance = 1e-3;      
-            options.step_size = 1.0;      
+            options.max_iterations = 10000;
+            options.tolerance = 1e-3;
+            options.step_size = 1.0;
             solver.set_options(options);
 
             SolverResult solver_result = solver.solve(problem);
@@ -305,16 +322,16 @@ namespace portfolio
                 problem.b_eq = Eigen::VectorXd::Ones(1);
             }
 
-            // Box constraints
-            problem.lower_bounds = Eigen::VectorXd::Constant(n, constraints.min_weight);
-            problem.upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
+            // Box constraints intersected with per-asset turnover
+            compute_turnover_bounds(n, constraints, current_weights,
+                                    problem.lower_bounds, problem.upper_bounds);
 
             // Solve
             OSQPSolver solver;
             SolverOptions options;
-            options.max_iterations = 10000; 
-            options.tolerance = 1e-3;      
-            options.step_size = 1.0;      
+            options.max_iterations = 10000;
+            options.tolerance = 1e-3;
+            options.step_size = 1.0;
             solver.set_options(options);
 
             SolverResult solver_result = solver.solve(problem);
@@ -328,6 +345,39 @@ namespace portfolio
             result.iterations = solver_result.iterations;
 
             return result;
+        }
+
+        // ============================================================================
+        // Per-Asset Turnover Constraint Helper
+        // ============================================================================
+
+        void MeanVarianceOptimizer::compute_turnover_bounds(
+            int n,
+            const OptimizationConstraints &constraints,
+            const Eigen::VectorXd &current_weights,
+            Eigen::VectorXd &lower_bounds,
+            Eigen::VectorXd &upper_bounds) const
+        {
+            // Start from standard box constraints
+            lower_bounds = Eigen::VectorXd::Constant(n, constraints.min_weight);
+            upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
+
+            // Tighten with per-asset turnover when applicable:
+            //   current_weights must be provided (non-empty)
+            //   max_turnover must be restrictive (< 1.0 is always non-binding
+            //   for weights in [0, 1])
+            if (current_weights.size() == n && constraints.max_turnover < 1.0)
+            {
+                for (int i = 0; i < n; ++i)
+                {
+                    double turnover_lb = current_weights(i) - constraints.max_turnover;
+                    double turnover_ub = current_weights(i) + constraints.max_turnover;
+
+                    // Intersection: tighter of box and turnover wins per asset
+                    lower_bounds(i) = std::max(lower_bounds(i), turnover_lb);
+                    upper_bounds(i) = std::min(upper_bounds(i), turnover_ub);
+                }
+            }
         }
 
     } // namespace optimizer

@@ -89,12 +89,12 @@ add_library(optimizer ${OPTIMIZER_SOURCES})
 target_include_directories(optimizer PUBLIC 
     ${CMAKE_SOURCE_DIR}/include
     ${EIGEN3_INCLUDE_DIR}
-    ${OSQP_INCLUDE_DIR}  # Add this line
+    ${OSQP_INCLUDE_DIR}  
 )
 target_link_libraries(optimizer PUBLIC 
     Eigen3::Eigen
     risk
-    ${OSQP_LIBRARY}  # Add this line
+    ${OSQP_LIBRARY}  
 )
 
 if(nlohmann_json_FOUND)
@@ -162,6 +162,26 @@ target_link_libraries(test_mean_variance_optimizer PRIVATE
     Catch2::Catch2WithMain
 )
 add_test(NAME MeanVarianceOptimizer COMMAND test_mean_variance_optimizer)
+
+# Efficient Frontier Tests
+add_executable(test_efficient_frontier tests/test_efficient_frontier.cpp)
+target_link_libraries(test_efficient_frontier PRIVATE
+    optimizer
+    risk
+    data
+    Catch2::Catch2WithMain
+)
+add_test(NAME EfficientFrontier COMMAND test_efficient_frontier)
+
+# Turnover constraint tests
+add_executable(test_turnover_constraints tests/test_turnover_constraints.cpp)
+target_link_libraries(test_turnover_constraints PRIVATE
+    optimizer
+    risk
+    data
+    Catch2::Catch2WithMain
+)
+add_test(NAME TurnoverConstraints COMMAND test_turnover_constraints)
 
 # Update run_tests target
 add_custom_target(run_tests

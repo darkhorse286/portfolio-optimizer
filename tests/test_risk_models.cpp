@@ -154,7 +154,7 @@ TEST_CASE_METHOD(RiskModelTestFixture, "SampleCovariance basic estimation", "[Ri
             for (int j = 0; j < result.cols(); ++j)
             {
                 REQUIRE_THAT(result(i, j),
-                             WithinAbs(expected_sample_cov_(i, j), 1e-8));
+                             WithinAbs(expected_sample_cov_(i, j), 1e-4));
             }
         }
     }

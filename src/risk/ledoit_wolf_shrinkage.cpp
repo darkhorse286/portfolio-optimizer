@@ -13,7 +13,7 @@ namespace portfolio
     namespace risk
     {
 
-        LedoitWolfShrinkage::LedoitWolfShrinkage(ShrinkageTarget target, double shrinkage_override): target_(target), shrinkage_override_(shrinkage_override), last_shrinkage_(0.0)
+        LedoitWolfShrinkage::LedoitWolfShrinkage(ShrinkageTarget target, double shrinkage_override) : target_(target), shrinkage_override_(shrinkage_override), last_shrinkage_(0.0)
         {
 
             validate_shrinkage(shrinkage_override);
@@ -21,17 +21,16 @@ namespace portfolio
 
         void LedoitWolfShrinkage::validate_shrinkage(double shrinkage)
         {
-            if (shrinkage < -1.0 || shrinkage > 1.0)
+            // Valid: -1.0 (auto) or [0.0, 1.0] (fixed)
+            if (shrinkage == -1.0)
             {
-                throw std::invalid_argument(
-                    "Shrinkage override must be in [0, 1] or -1 for auto, got: " +
-                    std::to_string(shrinkage));
+                return; // Auto mode
             }
 
-            if (shrinkage >= 0.0 && shrinkage > 1.0)
+            if (shrinkage < 0.0 || shrinkage > 1.0)
             {
                 throw std::invalid_argument(
-                    "Shrinkage override must be in [0, 1], got: " +
+                    "Shrinkage override must be -1 (auto) or in [0, 1], got: " +
                     std::to_string(shrinkage));
             }
         }

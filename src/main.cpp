@@ -353,6 +353,9 @@ int run(const CommandLineArgs &args)
             {
                 frontier_result.print_summary();
 
+                // Create output directory if it doesn't exist
+                std::filesystem::create_directories(args.output_dir);
+                
                 // Export to CSV
                 std::string frontier_file = args.output_dir + "/efficient_frontier.csv";
                 frontier_result.export_to_csv(frontier_file);
