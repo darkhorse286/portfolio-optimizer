@@ -1,216 +1,41 @@
-﻿# Quantum Portfolio Optimizer
+﻿# Portfolio Optimizer
 
-A modern C++17 portfolio optimization system demonstrating quantitative finance algorithms, from classical mean-variance optimization to quantum-ready QUBO formulations. Built with production-quality code, comprehensive testing, and professional development practices.
+A high-performance C++ portfolio optimization library implementing modern portfolio theory with production-grade solvers.
 
-## Project Vision
+## Features
 
-**Goal**: Build a production-ready portfolio optimization engine that bridges classical and quantum computing approaches, demonstrating:
+### Completed
 
-* Modern C++ development practices for quantitative finance
-* Efficient numerical computing with Eigen
-* Extensible architecture for multiple optimization strategies
-* Comprehensive backtesting and performance analysis
-* Quantum-ready algorithms (QUBO formulations)
+- **Data Layer**: CSV/JSON loading, return calculation, statistical analysis
+- **Risk Models**: Sample covariance, EWMA, Ledoit-Wolf shrinkage
+- **Mean-Variance Optimization**: Markowitz portfolio optimization with OSQP solver
+- **Efficient Frontier**: Complete Pareto-optimal frontier computation
+- **Turnover Constraints**: Per-asset position change limits
+- **Build System**: CMake with Docker support
+- **Testing**: Comprehensive test suite with Catch2 (65 tests, 100% passing)
 
-**Target Use Cases**:
+### In Development
 
-* Quantitative finance research and development
-* Educational demonstration of portfolio optimization techniques
-* Basis for production trading systems
-* Quantum computing algorithm exploration
+- Feature Set 2.3: Advanced constraints and direct optimization methods
 
----
+### Planned
 
-## System Architecture
-
-### High-Level Design
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Portfolio Optimizer Engine                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────┐    │
-│  │ Data Layer   │  │ Risk Models  │  │  Optimizers         │    │
-│  │  COMPLETE    │  │  COMPLETE    │  │   IN PROGRESS       │    │
-│  │              │  │              │  │                     │    │
-│  │ • CSV Load   │  │ • Sample Cov │  │ • Mean-Variance     │    │
-│  │ • Returns    │  │ • EWMA       │  │ • OSQP Solver       │    │
-│  │ • Filtering  │  │ • Shrinkage  │  │ • Efficient Frontier│    │
-│  │ • Validation │  │ • Factory    │  │ • QUBO Formulation  │    │
-│  └──────────────┘  └──────────────┘  └─────────────────────┘    │
-│         │                 │                    │                │
-│         └─────────────────┴────────────────────┘                │
-│                           │                                     │
-│                    ┌──────▼─────────┐                           │
-│                    │  Backtester    │                           │
-│                    │  PLANNED       │                           │
-│                    │                │                           │
-│                    │ • Walk-Forward │                           │
-│                    │ • Rebalancing  │                           │
-│                    │ • Txn Costs    │                           │
-│                    │ • Metrics      │                           │
-│                    └──────┬─────────┘                           │
-│                           │                                     │
-│                    ┌──────▼─────────┐                           │
-│                    │ Visualization  │                           │
-│                    │  PLANNED       │                           │
-│                    │   (Python)     │                           │
-│                    └────────────────┘                           │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Current Status: Foundation + Risk Models + Optimizer (In Progress)
-
-### Implemented Features (Production-Ready)
-
-#### 1. Data Management Layer COMPLETE
-
-**Files**: `include/data/`, `src/data/`  
-**Lines of Code**: ~1,800
-
-##### MarketData Class
-* Efficient time-series storage using Eigen matrices
-* Multiple return calculation methods (simple, log)
-* Date range filtering and asset selection
-* Missing data handling (drop, forward-fill)
-* Statistical methods (mean, volatility, correlation)
-* Fast lookups with index maps
-* Comprehensive validation and error handling
-
-##### DataLoader Class
-* CSV loading (wide and long format, auto-detect)
-* JSON configuration parsing with type-safe structures
-* Synthetic data generation (geometric Brownian motion)
-* Robust error handling and validation
-* Export capabilities (CSV wide/long formats)
-
-#### 2. Risk Model Estimation COMPLETE
-
-**Files**: `include/risk/`, `src/risk/`  
-**Lines of Code**: ~2,500
-
-##### RiskModel Interface
-* Abstract base class for all covariance estimators
-* Common validation and utility methods
-* Covariance-to-correlation conversion
-* Consistent error handling
-
-##### Sample Covariance
-* Classical sample covariance estimation
-* Optional Bessel's correction (unbiased estimate)
-* Matches NumPy computation to machine precision
-* Performance: ~2ms for 100x100 matrix
-
-##### EWMA Covariance
-* Exponentially weighted moving average
-* Configurable decay parameter (lambda)
-* Adaptive to regime changes
-* RiskMetrics standard (lambda=0.94)
-* Performance: ~3ms for 100x100 matrix
-
-##### Ledoit-Wolf Shrinkage
-* Covariance shrinkage for small samples
-* Automatic optimal shrinkage intensity
-* Multiple target matrices (identity, constant correlation, market model)
-* Improved matrix conditioning
-* Performance: ~5ms for 100x100 matrix
-
-##### Factory Pattern
-* Configuration-driven risk model creation
-* JSON-based parameter specification
-* Type-safe parameter handling
-
-#### 3. Portfolio Optimization IN PROGRESS (70% Complete)
-
-**Files**: `include/optimizer/`, `src/optimizer/`  
-**Status**: Core functionality complete, efficient frontier in progress
-
-##### MeanVarianceOptimizer 
-* Markowitz mean-variance framework
-* Three optimization modes:
-  - **Minimum Variance**: Find lowest risk portfolio
-  - **Target Return**: Achieve specific return with minimum risk
-  - **Risk Aversion**: Balance return vs risk with lambda parameter
-* **Max Sharpe Ratio**: Grid search approximation
-* Box constraints (min/max weights per asset)
-* Budget constraint (weights sum to 1)
-* Long-only constraint support
-
-##### OSQP Solver Integration NEW!
-* Production-grade quadratic programming solver
-* Replaced custom solver (200x performance improvement)
-* Sparse matrix support (CSC format)
-* Robust constraint handling
-* Typical convergence: 25-50 iterations
-* Performance: <1ms per optimization (2-20 assets)
-
-##### Test Coverage 
-* **11 comprehensive tests** (11/11 passing)
-* Constraint tightness validation (4 levels)
-* Problem size scaling (2-20 assets)
-* Max Sharpe ratio convergence
-* Risk aversion parameter sweep
-* Ill-conditioned matrix handling
-* Conflicting constraint detection
-* Real market data integration
-
-##### Coming Soon 
-* **Efficient Frontier**: Full frontier computation with Pareto-optimal portfolios
-* **Direct Max Sharpe**: Fractional programming approach (non-convex optimization)
-* **Turnover Constraints**: Limit portfolio changes between rebalances
-* **Sector Constraints**: Industry group limits
-
----
-
-## Performance Benchmarks
-
-Current implementation performance:
-
-| Operation | Time (10 assets, 504 days) | Status |
-| --- | --- | --- |
-| CSV Load | ~5 ms | Complete |
-| Return Calculation | < 1 ms | Complete |
-| Sample Covariance | ~2 ms | Complete |
-| EWMA Covariance | ~3 ms | Complete |
-| Ledoit-Wolf Shrinkage | ~5 ms | Complete |
-| **Min Variance Optimization** | **<1 ms** | **NEW!** |
-| **Target Return Optimization** | **<1 ms** | **NEW!** |
-| **Risk Aversion Optimization** | **<1 ms** | **NEW!** |
-| **Max Sharpe (Grid Search)** | **~10 ms** | **NEW!** |
-
-**Convergence Performance (OSQP)**:
-- 2 assets: ~25 iterations, <1ms
-- 10 assets: ~50 iterations, <1ms
-- 20 assets: ~50 iterations, ~1ms
-- Typical: 25-50 iterations vs 5000+ with custom solver
-
----
+- Feature Set 3: Backtesting engine with transaction costs
+- Feature Set 4: Performance analytics and attribution
+- Feature Set 5: Visualization and reporting
 
 ## Quick Start
 
 ### Prerequisites
-```bash
-# Ubuntu 22.04/24.04 or WSL2
-sudo apt-get update
-sudo apt-get install -y build-essential cmake gdb \
-    libeigen3-dev nlohmann-json3-dev \
-    python3 python3-pip
 
-# Install OSQP (for optimization)
-cd ~/projects
-git clone --recursive https://github.com/osqp/osqp
-cd osqp && mkdir build && cd build
-cmake -G "Unix Makefiles" ..
-make -j$(nproc)
-sudo make install
-sudo ldconfig
+- C++17 compiler (GCC 13+ or Clang 14+)
+- CMake 3.15+
+- Eigen 3.3+
+- OSQP 0.6.3+
+- nlohmann/json 3.2.0+
 
-pip3 install numpy pandas matplotlib seaborn scipy plotly kaleido
-```
+### Build
 
-### Build and Run
 ```bash
 # Clone repository
 git clone https://github.com/darkhorse286/portfolio-optimizer.git
@@ -221,38 +46,141 @@ mkdir build && cd build
 cmake ..
 make -j$(nproc)
 
-# Run optimizer
-./bin/portfolio_optimizer \
-    --config ../data/config/portfolio_config.json \
-    --verbose
-
 # Run tests
-./bin/test_mean_variance_optimizer
+make test
+
+# Run optimizer
+./bin/portfolio_optimizer --config ../data/config/portfolio_config.json
 ```
 
-### Using Docker
+### Docker Build
+
 ```bash
-docker-compose build
-docker-compose run optimizer
+docker build -t portfolio-optimizer .
+docker run -it portfolio-optimizer
 ```
 
----
+## Usage Examples
+
+### Basic Mean-Variance Optimization
+
+```cpp
+#include "optimizer/mean_variance_optimizer.hpp"
+#include "data/data_loader.hpp"
+#include "risk/sample_covariance.hpp"
+
+// Load market data
+auto data = DataLoader::load_csv("prices.csv");
+
+// Calculate returns
+auto returns = data.calculate_returns(ReturnType::LOG);
+
+// Estimate covariance
+SampleCovariance cov_estimator;
+auto covariance = cov_estimator.estimate_covariance(returns);
+
+// Set up optimizer
+MeanVarianceOptimizer optimizer(ObjectiveType::MAX_SHARPE, 0.02);
+
+// Configure constraints
+OptimizationConstraints constraints;
+constraints.min_weight = 0.0;
+constraints.max_weight = 0.3;
+constraints.long_only = true;
+constraints.sum_to_one = true;
+
+// Optimize
+auto result = optimizer.optimize(
+    data.get_mean_returns(),
+    covariance,
+    constraints
+);
+
+// Display results
+result.print_summary();
+```
+
+### Efficient Frontier Computation
+
+```cpp
+#include "optimizer/efficient_frontier.hpp"
+
+// Configure frontier
+EfficientFrontier frontier;
+frontier.set_num_points(20);
+frontier.set_auto_range(true);
+
+// Compute frontier
+auto result = frontier.compute(
+    expected_returns,
+    covariance,
+    constraints,
+    0.02  // risk-free rate
+);
+
+// Export and display
+result.export_to_csv("frontier.csv");
+result.print_summary();
+
+std::cout << "Max Sharpe Portfolio:\n";
+std::cout << "  Return: " << result.max_sharpe_portfolio.expected_return * 100 << "%\n";
+std::cout << "  Risk: " << result.max_sharpe_portfolio.volatility * 100 << "%\n";
+std::cout << "  Sharpe: " << result.max_sharpe_portfolio.sharpe_ratio << "\n";
+```
+
+### Turnover Constraints
+
+```cpp
+// Current portfolio
+Eigen::VectorXd current_weights(n_assets);
+current_weights << 0.2, 0.3, 0.5;
+
+// Limit position changes to 10% per asset
+OptimizationConstraints constraints;
+constraints.max_turnover = 0.10;
+
+// Rebalance with turnover limit
+auto result = optimizer.optimize(
+    expected_returns,
+    covariance,
+    constraints,
+    current_weights
+);
+
+// Check actual turnover
+for (int i = 0; i < n_assets; ++i) {
+    double change = std::abs(result.weights(i) - current_weights(i));
+    std::cout << "Asset " << i << " turnover: " << change * 100 << "%\n";
+}
+```
 
 ## Configuration
 
-### Optimizer Configuration
+Portfolio configuration is specified in JSON format:
+
 ```json
 {
+  "data": {
+    "source": "csv",
+    "filepath": "data/prices/market_data.csv",
+    "tickers": ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA"],
+    "start_date": "2020-01-01",
+    "end_date": "2024-12-31"
+  },
+  "risk_model": {
+    "type": "ledoit_wolf",
+    "shrinkage_target": "constant_correlation",
+    "bias_correction": true
+  },
   "optimizer": {
     "type": "mean_variance",
     "objective": "max_sharpe",
-    "risk_aversion": 1.0,
     "constraints": {
-      "max_weight": 0.30,
-      "min_weight": 0.05,
-      "sum_to_one": true,
+      "min_weight": 0.0,
+      "max_weight": 0.3,
       "long_only": true,
-      "max_turnover": 0.50
+      "sum_to_one": true,
+      "max_turnover": 0.15
     },
     "risk_free_rate": 0.02
   }
@@ -260,150 +188,238 @@ docker-compose run optimizer
 ```
 
 **Optimizer Types**:
-- `"mean_variance"`: Classical Markowitz optimization (implemented)
-- `"qubo"`: Quantum-ready formulation (planned)
+- `mean_variance`: Markowitz optimization (implemented)
+- `qubo`: Quantum-ready formulation (planned for 2.3)
 
 **Objectives**:
-- `"min_variance"`: Minimize portfolio volatility
-- `"target_return"`: Achieve specific return with minimum risk
-- `"max_sharpe"`: Maximize risk-adjusted return
-- `"risk_aversion"`: Balance return vs risk with lambda parameter
+- `min_variance`: Minimize portfolio volatility
+- `target_return`: Achieve specific return with minimum risk
+- `max_sharpe`: Maximize risk-adjusted return
+- `risk_aversion`: Balance return vs risk with lambda parameter
 
----
+**Constraints**:
+- `min_weight`, `max_weight`: Box constraints per asset
+- `long_only`: No short positions
+- `sum_to_one`: Full investment (weights sum to 1)
+- `max_turnover`: Maximum position change per asset
 
 ## Testing
+
 ```bash
 # Build and run all tests
 cd build
 make -j$(nproc)
+make test
+
+# Run specific test suites
+./bin/test_data_loader
+./bin/test_risk_models
 ./bin/test_mean_variance_optimizer
+./bin/test_efficient_frontier
+./bin/test_turnover_constraints
 
 # Run with verbose output
-./bin/test_mean_variance_optimizer -s
+./bin/test_efficient_frontier -s
 
-# Run specific test suite
-./bin/test_mean_variance_optimizer "[Unit]"
-./bin/test_mean_variance_optimizer "[Integration]"
-./bin/test_mean_variance_optimizer "[Convergence]"
+# Run specific test tags
+./bin/test_efficient_frontier "[Basic]"
+./bin/test_turnover_constraints "[Validation]"
 ```
 
 **Test Coverage**:
-- Unit tests: Core functionality (5 tests)
-- Integration tests: Real data scenarios (2 tests)
-- Convergence tests: Algorithm performance (4 tests)
-- Total: 11 tests, 10/11 passing (91%)
+- Data Layer: 8 tests
+- Risk Models: 10 tests
+- Mean-Variance Optimizer: 11 tests
+- Efficient Frontier: 17 tests
+- Turnover Constraints: 10 tests
+- Extended Integration: 9 tests
+- **Total**: 65 tests, 100% passing
 
----
+## Project Structure
 
-## Code Statistics
 ```
-Production Code:     ~6,800 lines C++17 (+2,500 from Feature Set 2.1)
-Test Code:           ~1,200 lines (+700 from Feature Set 2.1)
-Build Config:        ~250 lines (CMake, Docker)
-Documentation:       ~4,500 lines (README, guides, release notes)
-Total:               ~12,750 lines
-
-Directory Structure:
-├── include/                    # Public headers
-│   ├── data/                    Complete (2 files)
-│   ├── risk/                    Complete (5 files)
-│   └── optimizer/               In Progress (3 files)
-├── src/                        # Implementation
-│   ├── main.cpp                 Complete
-│   ├── data/                    Complete (2 files)
-│   ├── risk/                    Complete (5 files)
-│   └── optimizer/               In Progress (3 files)
-├── tests/                      # Test framework ready
-│   ├── test_data_loader.cpp    Complete
-│   ├── test_risk_models.cpp    Complete
-│   └── test_mean_variance_optimizer.cpp  Complete
-└── data/                        Config files ready
-
-Build System:         CMake + Docker complete
-Development Setup:    VS Code integration complete
+portfolio-optimizer/
+├── include/                        # Public headers
+│   ├── data/                       Complete (2 files)
+│   │   ├── market_data.hpp
+│   │   └── data_loader.hpp
+│   ├── risk/                       Complete (5 files)
+│   │   ├── risk_model.hpp
+│   │   ├── sample_covariance.hpp
+│   │   ├── ewma_covariance.hpp
+│   │   ├── ledoit_wolf_shrinkage.hpp
+│   │   └── risk_model_factory.hpp
+│   └── optimizer/                  Complete (5 files)
+│       ├── optimizer_interface.hpp
+│       ├── mean_variance_optimizer.hpp
+│       ├── efficient_frontier.hpp
+│       ├── osqp_solver.hpp
+│       └── quadratic_solver.hpp
+├── src/                            # Implementation
+│   ├── main.cpp
+│   ├── data/                       Complete (2 files)
+│   ├── risk/                       Complete (5 files)
+│   └── optimizer/                  Complete (5 files)
+├── tests/                          # Test suite
+│   ├── test_data_loader.cpp        8 tests
+│   ├── test_risk_models.cpp        10 tests
+│   ├── test_mean_variance_optimizer.cpp  11 tests
+│   ├── test_efficient_frontier.cpp       17 tests
+│   └── test_turnover_constraints.cpp     10 tests
+├── data/                           # Configuration and sample data
+│   ├── config/
+│   └── prices/
+├── docs/                           # Documentation
+└── CMakeLists.txt                  # Build configuration
 ```
 
----
+## Project Status
 
-## Planned Feature Deliveries
+| Component | Status | Completeness |
+|-----------|--------|--------------|
+| Data Layer | Complete | 100% |
+| Risk Models | Complete | 100% |
+| Build System | Complete | 100% |
+| Testing Framework | Complete | 100% |
+| Mean-Variance Optimizer | Complete | 100% |
+| Efficient Frontier | Complete | 100% |
+| Turnover Constraints | Complete | 100% |
+| Advanced Constraints | Planned | 0% |
+| Backtesting | Planned | 0% |
+| Analytics | Planned | 0% |
+| Visualization | Planned | 0% |
 
-### Feature Set 2: Portfolio Optimization (IN PROGRESS - 70%)
+**Overall Progress**: 65% Complete (3.25/5 major feature sets)
 
-**Status**: Core optimizer complete, efficient frontier next
+## Recent Updates
 
-**Completed (2.1)**:
-- Mean-variance optimizer with OSQP
-- Constraint handling (box, budget, long-only)
-- Max Sharpe ratio (grid search)
-- Comprehensive test suite
+### v1.3.0-beta - Feature Set 2.2 (February 2026)
 
-**Next (2.2)**:
-- Efficient frontier computation
-- Direct Max Sharpe optimization
-- Turnover constraints
-- Sector/group constraints
+**Completed**:
+- Efficient frontier computation with dual methods (risk aversion, target return)
+- Automatic feasible return range detection
+- Special portfolio identification (min variance, max Sharpe)
+- CSV export and summary statistics
+- Per-asset turnover constraints across all optimization modes
+- 27 new tests (17 frontier, 10 turnover), 100% passing
+- Command-line integration with --frontier flag
+- Performance: 20-point frontier in 20ms (10 assets)
 
-### Feature Set 3: Backtesting Engine (PLANNED)
+### v1.2.0-alpha - Feature Set 2.1 (January 2026)
+
+**Completed**:
+- Mean-variance optimizer with OSQP integration
+- Three optimization modes (min variance, target return, risk aversion)
+- Max Sharpe ratio via grid search
+- Comprehensive constraint handling (box, budget, long-only)
+- 200x performance improvement over custom solver
+- 11-test suite with convergence diagnostics
+
+### v1.1.0 - Feature Set 1 (January 2026)
+
+**Completed**:
+- Risk model estimation framework
+- Sample covariance, EWMA, Ledoit-Wolf shrinkage estimators
+- Risk model factory pattern
+- 30+ risk model tests
+
+## Performance
+
+| Operation | Time | Details |
+|-----------|------|---------|
+| CSV loading | 5ms | 1000 rows, 10 assets |
+| Return calculation | 1ms | 1000 periods |
+| Covariance estimation | 2-5ms | Sample/EWMA/Ledoit-Wolf |
+| Portfolio optimization | <1ms | Single optimization, 2-50 assets |
+| Efficient frontier | 20ms | 20 points, 10 assets |
+| Complete pipeline | <150ms | Data load + risk + frontier |
+
+All performance targets exceeded.
+
+## Roadmap
+
+### Feature Set 2.3: Advanced Constraints and Optimization (Planned)
+
+**Scope**:
+- Direct Max Sharpe optimization (fractional programming)
+- Sector and group constraints (industry exposure limits)
+- Tracking error constraints (vs benchmark)
+- Cardinality constraints (max number of positions)
+
+**Status**: Design phase
+**Estimated Effort**: 2-3 weeks
+
+### Feature Set 3: Backtesting Engine (Planned)
 
 **Components**:
 ```cpp
 namespace portfolio::backtest {
-    class Portfolio;                    // Position tracking
-    class BacktestEngine;               // Walk-forward simulation
-    class RebalanceScheduler;           // Daily/weekly/monthly
-    class TransactionCostModel;         // Commissions, slippage
+    class Portfolio;                // Position tracking
+    class BacktestEngine;           // Walk-forward simulation
+    class RebalanceScheduler;       // Daily/weekly/monthly
+    class TransactionCostModel;     // Commissions, slippage
+    class TradeLogger;              // Trade history
 }
 ```
 
-### Feature Set 4: Performance Analytics (PLANNED)
+**Key Features**:
+- Walk-forward backtesting with rolling windows
+- Transaction cost modeling (commissions, slippage, market impact)
+- Flexible rebalancing schedules (calendar and threshold-based)
+- Portfolio state tracking (positions, cash, P&L)
+- Trade attribution and analysis
 
-**Metrics**: Total return, Sharpe ratio, max drawdown, VaR, CVaR, alpha, beta, tracking error
+**Status**: Requirements gathering
+**Estimated Effort**: 4-6 weeks
 
-### Feature Set 5: Visualization & Reporting (PLANNED)
+### Feature Set 4: Performance Analytics (Planned)
 
-**Tools**: Python plotting, HTML reports, equity curves, weight evolution, efficient frontier
+**Metrics**:
+- Return metrics: Total return, CAGR, annualized returns
+- Risk metrics: Volatility, max drawdown, VaR, CVaR, downside deviation
+- Risk-adjusted: Sharpe, Sortino, Calmar, Information ratios
+- Relative: Alpha, beta, tracking error, R-squared
+- Attribution: Brinson-Fachler decomposition
 
----
+**Status**: Planned
+**Estimated Effort**: 3-4 weeks
 
-## Project Status Summary
+### Feature Set 5: Visualization and Reporting (Planned)
 
-| Feature Set | Status | Completeness |
-| --- | --- | --- |
-| **Data Layer** | Complete | 100% |
-| **Risk Models** | Complete | 100% |
-| **Build System** | Complete | 100% |
-| **Testing Framework** | Complete | 100% |
-| **Dev Environment** | Complete | 100% |
-| **Optimizers** | In Progress | 70% |
-| **Backtesting** | Planned | 0% |
-| **Analytics** | Planned | 0% |
-| **Visualization** | Planned | 0% |
+**Tools**:
+- Python integration for plotting (matplotlib/plotly)
+- HTML report generation
+- Equity curve visualization
+- Weight evolution charts
+- Risk decomposition plots
+- Efficient frontier plots
 
-**Overall Progress**: 54% Complete (2.7/5 major feature sets)
+**Status**: Planned
+**Estimated Effort**: 3-4 weeks
 
----
+### Feature Set 6: Quantum: Quantum Optimization (Planned)
 
-## Recent Updates
+**Key Features**
+- Portfolio optimization as QUBO problem
+- Portfolio optimization as QUOPLE problem
+- Portfolio optimization as QAOA problem
+- Portfolio optimization as QAMOO problem
 
-### **v1.2.0-alpha** - Feature Set 2.1: Mean-Variance Optimization (January 2025)
+## Code Statistics
 
-**Major Changes**:
-- Implemented Markowitz mean-variance optimizer
-- Integrated OSQP production solver (200x faster than custom)
-- Added 3 optimization modes (min variance, target return, risk aversion)
-- Max Sharpe ratio via grid search
-- Comprehensive constraint handling (box, budget, long-only)
-- 11-test suite with convergence diagnostics
-- Performance: <1ms per optimization, 25-50 iterations typical
+```
+Production Code:     ~8,500 lines C++17
+Test Code:           ~2,800 lines
+Build Config:        ~300 lines (CMake, Docker)
+Documentation:       ~6,000 lines (README, guides, release notes)
+Total:               ~17,600 lines
 
-**Performance Improvements**:
-- Custom solver: 5000 iterations, no convergence
-- OSQP solver: 25-50 iterations, <1ms runtime
-- **200x convergence speedup!**
-
-**Test Results**: 10/11 passing (91% success rate)
-
----
+Test Coverage:
+  Unit tests:        45 tests
+  Integration tests: 15 tests
+  Convergence tests: 5 tests
+  Total:            65 tests (100% passing)
+```
 
 ## Contributing
 
@@ -412,25 +428,35 @@ Contributions are welcome! Please:
 1. Fork the repository
 2. Create a feature branch
 3. Write tests for new functionality
-4. Ensure code compiles with no warnings
+4. Ensure code compiles with no warnings (-Wall -Wextra -Wpedantic)
 5. Update documentation
 6. Submit a pull request
 
-**Priority areas for contribution**:
-- Efficient frontier computation
-- Additional constraint types
+**Current Priority Areas**:
+- Direct Max Sharpe optimization implementation
+- Sector constraint formulation
+- Backtesting engine components
 - Performance optimizations
-- Enhanced visualization
 - Documentation improvements
-
----
 
 ## License
 
 MIT License - see LICENSE file for details
 
----
+## References
 
-**Last Updated**: January 30, 2026  
-**Version**: 1.2.0-alpha  
-**Next Milestone**: Feature Set 2.2 - Efficient Frontier Computation
+1. Markowitz, H. (1952). "Portfolio Selection", The Journal of Finance
+2. Stellato, B. et al. (2020). "OSQP: An Operator Splitting Solver for Quadratic Programs", Mathematical Programming Computation
+3. Boyd, S. & Vandenberghe, L. (2004). Convex Optimization, Cambridge University Press
+4. Ledoit, O. & Wolf, M. (2004). "Honey, I Shrunk the Sample Covariance Matrix", Journal of Portfolio Management
+
+## Contact
+
+For questions, issues, or contributions, please visit the GitHub repository:
+https://github.com/darkhorse286/portfolio-optimizer
+
+## Version
+
+Current Version: 1.3.0
+Last Updated: February 4, 2026
+Next Milestone: Feature Set 2.3 - Advanced Constraints and Direct Optimization
