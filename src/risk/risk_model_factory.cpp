@@ -60,13 +60,13 @@ namespace portfolio
 
         nlohmann::json RiskModelConfig::to_json() const
         {
-            nlohmann::json{
-                {"type", type},
-                {"estimation_window", estimation_window},
-                {"bias_correction", bias_correction},
-                {"ewma_lambda", ewma_lambda},
-                {"shrinkage_target", shrinkage_target},
-                {"shrinkage_intensity", shrinkage_intensity}};
+            return nlohmann::json{// ✅ FIXED!
+                                  {"type", type},
+                                  {"estimation_window", estimation_window},
+                                  {"bias_correction", bias_correction},
+                                  {"ewma_lambda", ewma_lambda},
+                                  {"shrinkage_target", shrinkage_target},
+                                  {"shrinkage_intensity", shrinkage_intensity}};
         }
 
         // RiskModelFactory implementation

@@ -41,10 +41,10 @@ namespace portfolio
          */
         enum class ObjectiveType
         {
-            MIN_VARIANCE,      ///< Minimize variance only
-            MAX_SHARPE,        ///< Maximize Sharpe ratio
-            TARGET_RETURN,     ///< Target return with min variance
-            RISK_AVERSION      ///< Utility: return - lambda*variance
+            MIN_VARIANCE,  ///< Minimize variance only
+            MAX_SHARPE,    ///< Maximize Sharpe ratio
+            TARGET_RETURN, ///< Target return with min variance
+            RISK_AVERSION  ///< Utility: return - lambda*variance
         };
 
         /**
@@ -66,11 +66,11 @@ namespace portfolio
          * @code
          * MeanVarianceOptimizer optimizer(ObjectiveType::MAX_SHARPE, 0.02);
          * optimizer.set_risk_aversion(1.0);
-         * 
+         *
          * OptimizationConstraints constraints;
          * constraints.min_weight = 0.0;
          * constraints.max_weight = 0.3;
-         * 
+         *
          * auto result = optimizer.optimize(returns, covariance, constraints);
          * std::cout << "Sharpe: " << result.sharpe_ratio << "\n";
          * @endcode
@@ -106,17 +106,17 @@ namespace portfolio
              * @throws std::runtime_error if optimization fails
              */
             OptimizationResult optimize(
-                const Eigen::VectorXd& expected_returns,
-                const Eigen::MatrixXd& covariance,
-                const OptimizationConstraints& constraints,
-                const Eigen::VectorXd& current_weights = Eigen::VectorXd()) const override;
+                const Eigen::VectorXd &expected_returns,
+                const Eigen::MatrixXd &covariance,
+                const OptimizationConstraints &constraints,
+                const Eigen::VectorXd &current_weights = Eigen::VectorXd()) const override;
 
             /**
              * @brief Get optimizer name
              * @return "MeanVarianceOptimizer"
              */
             std::string get_name() const override;
-            
+
             /**
              * @brief Get parameters as JSON
              */
@@ -139,67 +139,88 @@ namespace portfolio
              * Used for TARGET_RETURN objective.
              */
             void set_target_return(double target_return);
-            
+
             /**
              * @brief Get risk aversion parameter
              */
             double get_risk_aversion() const { return risk_aversion_; }
-            
+
             /**
              * @brief Get target return
              */
             double get_target_return() const { return target_return_; }
-            
+
             /**
              * @brief Get objective type
              */
             ObjectiveType get_objective() const { return objective_; }
 
         private:
-            ObjectiveType objective_;       ///< Optimization objective
-            double risk_free_rate_;         ///< Risk-free rate
-            double risk_aversion_;          ///< Risk aversion parameter
-            double target_return_;          ///< Target return
+            ObjectiveType objective_; ///< Optimization objective
+            double risk_free_rate_;   ///< Risk-free rate
+            double risk_aversion_;    ///< Risk aversion parameter
+            double target_return_;    ///< Target return
 
             /**
              * @brief Optimize for minimum variance
              */
             OptimizationResult optimize_min_variance(
-                const Eigen::MatrixXd& covariance,
-                const OptimizationConstraints& constraints,
-                const Eigen::VectorXd& current_weights) const;
+                const Eigen::MatrixXd &covariance,
+                const OptimizationConstraints &constraints,
+                const Eigen::VectorXd &current_weights) const;
 
             /**
              * @brief Optimize for maximum Sharpe ratio
              */
             OptimizationResult optimize_max_sharpe(
-                const Eigen::VectorXd& expected_returns,
-                const Eigen::MatrixXd& covariance,
-                const OptimizationConstraints& constraints,
-                const Eigen::VectorXd& current_weights) const;
+                const Eigen::VectorXd &expected_returns,
+                const Eigen::MatrixXd &covariance,
+                const OptimizationConstraints &constraints,
+                const Eigen::VectorXd &current_weights) const;
 
             /**
              * @brief Optimize for target return
              */
             OptimizationResult optimize_target_return(
-                const Eigen::VectorXd& expected_returns,
-                const Eigen::MatrixXd& covariance,
-                const OptimizationConstraints& constraints,
-                const Eigen::VectorXd& current_weights) const;
+                const Eigen::VectorXd &expected_returns,
+                const Eigen::MatrixXd &covariance,
+                const OptimizationConstraints &constraints,
+                const Eigen::VectorXd &current_weights) const;
 
             /**
              * @brief Optimize with risk aversion utility
              */
             OptimizationResult optimize_risk_aversion(
-                const Eigen::VectorXd& expected_returns,
-                const Eigen::MatrixXd& covariance,
-                const OptimizationConstraints& constraints,
-                const Eigen::VectorXd& current_weights) const;
+                const Eigen::VectorXd &expected_returns,
+                const Eigen::MatrixXd &covariance,
+                const OptimizationConstraints &constraints,
+                const Eigen::VectorXd &current_weights) const;
 
             /**
              * @brief Validate optimizer parameters
              */
             void validate_parameters() const;
+
+            /**
+             * @brief Compute effective box bounds intersected with per-asset turnover limits
+             * @param n Number of assets
+             * @param constraints Portfolio constraints (min/max weight, max_turnover)
+             * @param current_weights Current portfolio weights (empty if unavailable)
+             * @param lower_bounds Output: effective lower bound per asset
+             * @param upper_bounds Output: effective upper bound per asset
+             *
+             * Starts from the standard box bounds [min_weight, max_weight].
+             * When current_weights is non-empty and max_turnover < 1.0, tightens
+             * each bound so that |w_i - current_weights_i| <= max_turnover.
+             * Final bounds are the intersection: the tighter of box and turnover
+             * for each asset independently.
+             */
+            void compute_turnover_bounds(
+                int n,
+                const OptimizationConstraints &constraints,
+                const Eigen::VectorXd &current_weights,
+                Eigen::VectorXd &lower_bounds,
+                Eigen::VectorXd &upper_bounds) const;
         };
 
     } // namespace optimizer

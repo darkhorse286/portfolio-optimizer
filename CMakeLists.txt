@@ -173,6 +173,16 @@ target_link_libraries(test_efficient_frontier PRIVATE
 )
 add_test(NAME EfficientFrontier COMMAND test_efficient_frontier)
 
+# Turnover constraint tests
+add_executable(test_turnover_constraints tests/test_turnover_constraints.cpp)
+target_link_libraries(test_turnover_constraints PRIVATE
+    optimizer
+    risk
+    data
+    Catch2::Catch2WithMain
+)
+add_test(NAME TurnoverConstraints COMMAND test_turnover_constraints)
+
 # Update run_tests target
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
