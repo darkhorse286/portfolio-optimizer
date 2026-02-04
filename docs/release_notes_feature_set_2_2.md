@@ -1,4 +1,4 @@
-# Release Notes: v1.3.0-beta - Advanced Portfolio Optimization
+# Release Notes: v1.3.0 - Advanced Portfolio Optimization
 
 **Release Date**: February 4, 2026  
 **Feature Set**: 2.2 - Advanced Portfolio Optimization
