@@ -347,6 +347,146 @@ namespace portfolio
             return result;
         }
 
+        OptimizationResult MeanVarianceOptimizer::optimize_max_sharpe_direct(
+            const Eigen::VectorXd &expected_returns,
+            const Eigen::MatrixXd &covariance,
+            const OptimizationConstraints &constraints,
+            const Eigen::VectorXd &current_weights) const
+        {
+            // Validate inputs and constraints
+            validate_inputs(expected_returns, covariance);
+            constraints.validate();
+
+            const int n = expected_returns.size();
+            if (covariance.rows() != n || covariance.cols() != n)
+            {
+                throw std::invalid_argument(
+                    "Covariance dimensions do not match expected_returns size");
+            }
+            if (current_weights.size() != 0 && current_weights.size() != n)
+            {
+                throw std::invalid_argument(
+                    "current_weights size does not match number of assets");
+            }
+
+            // Determine risk-free rate (use default 0.02 when not set)
+            double rf = (risk_free_rate_ == 0.0) ? 0.02 : risk_free_rate_;
+
+            // If user requested grid search only, use existing implementation
+            if (max_sharpe_method_ == MaxSharpeMethod::GRID_SEARCH)
+            {
+                OptimizationResult res = optimize_max_sharpe(
+                    expected_returns, covariance, constraints, current_weights);
+                res.message = "GRID_SEARCH: used fallback grid search";
+                return res;
+            }
+
+            // Coarse grid search for initialization
+            std::vector<double> lambdas = {0.1, 0.5, 1.0, 2.0, 5.0};
+            double best_sharpe = -std::numeric_limits<double>::infinity();
+            OptimizationResult best_grid_result;
+            Eigen::VectorXd best_grid_weights = Eigen::VectorXd::Zero(n);
+
+            for (double lambda : lambdas)
+            {
+                double original_lambda = risk_aversion_;
+                const_cast<MeanVarianceOptimizer *>(this)->risk_aversion_ = lambda;
+                OptimizationResult r = optimize_risk_aversion(
+                    expected_returns, covariance, constraints, current_weights);
+                const_cast<MeanVarianceOptimizer *>(this)->risk_aversion_ = original_lambda;
+
+                if (r.success && r.sharpe_ratio > best_sharpe)
+                {
+                    best_sharpe = r.sharpe_ratio;
+                    best_grid_result = r;
+                    best_grid_weights = r.weights;
+                }
+            }
+
+            // If no successful grid result, fallback
+            if (best_sharpe == -std::numeric_limits<double>::infinity())
+            {
+                OptimizationResult res = optimize_max_sharpe(
+                    expected_returns, covariance, constraints, current_weights);
+                res.message = "Fallback: grid search (no valid coarse initializations)";
+                return res;
+            }
+
+            // If method is GRID_SEARCH we already returned; for DIRECT or HYBRID
+            OptimizationResult final_result;
+
+            if (max_sharpe_method_ == MaxSharpeMethod::DIRECT ||
+                max_sharpe_method_ == MaxSharpeMethod::HYBRID)
+            {
+                // Attempt Schaible refinement
+                try
+                {
+                    // Initialize y = w / sqrt(w^T Sigma w)
+                    double quad = (best_grid_weights.transpose() * covariance * best_grid_weights)(0, 0);
+                    double denom = std::sqrt(std::max(0.0, quad));
+                    if (denom <= 0.0)
+                    {
+                        throw std::runtime_error("Invalid scaling during Schaible init: zero variance");
+                    }
+                    Eigen::VectorXd y = best_grid_weights / denom;
+
+                    const int max_iters = 20;
+                    const double tol = 1e-6;
+                    bool converged = false;
+
+                    for (int it = 0; it < max_iters; ++it)
+                    {
+                        Eigen::VectorXd y_new = schaibles_iteration(y, expected_returns, covariance, constraints, rf);
+
+                        if (check_schaibles_convergence(y, y_new, tol))
+                        {
+                            y = y_new;
+                            converged = true;
+                            final_result.iterations = it + 1;
+                            break;
+                        }
+
+                        y = y_new;
+                    }
+
+                    // Normalize back to weights
+                    Eigen::VectorXd weights;
+                    if (constraints.sum_to_one)
+                    {
+                        double s = y.sum();
+                        if (std::abs(s) < 1e-12)
+                        {
+                            throw std::runtime_error("Normalization failed: sum(y) is zero");
+                        }
+                        weights = y / s;
+                    }
+                    else
+                    {
+                        weights = y; // preserve sum equal to initial y sum
+                    }
+
+                    // Compute stats
+                    final_result = calculate_statistics(weights, expected_returns, covariance, rf);
+                    final_result.weights = weights;
+                    final_result.success = true;
+                    final_result.message = converged ? "Schaible refinement converged" : "Schaible refinement completed without convergence";
+                }
+                catch (const std::exception &e)
+                {
+                    // Fallback to grid search result
+                    best_grid_result.message = std::string("Schaible refinement failed: ") + e.what() + ". Used coarse grid result.";
+                    return best_grid_result;
+                }
+            }
+            else
+            {
+                // Should not reach: safe fallback
+                return best_grid_result;
+            }
+
+            return final_result;
+        }
+
         // ============================================================================
         // Per-Asset Turnover Constraint Helper
         // ============================================================================
@@ -378,6 +518,102 @@ namespace portfolio
                     upper_bounds(i) = std::min(upper_bounds(i), turnover_ub);
                 }
             }
+        }
+
+        /**
+         * @brief Single iteration of Schaible's fractional programming method
+         *
+         * Solves the QP subproblem:
+         *   minimize_y  y^T Sigma y
+         *   subject to  (mu - rf)^T y = 1
+         *               sum(y) = sum(y_current)
+         *               min_weight <= y_i <= max_weight
+         *
+         * Returns the raw y vector produced by the QP solver. Caller is
+         * responsible for normalization and convergence checks.
+         */
+        Eigen::VectorXd MeanVarianceOptimizer::schaibles_iteration(
+            const Eigen::VectorXd &y_current,
+            const Eigen::VectorXd &expected_returns,
+            const Eigen::MatrixXd &covariance,
+            const OptimizationConstraints &constraints,
+            double risk_free_rate) const
+        {
+            const int n = covariance.rows();
+
+            // Basic dimension checks
+            if (covariance.cols() != n)
+            {
+                throw std::invalid_argument("Covariance matrix must be square");
+            }
+            if (expected_returns.size() != n)
+            {
+                throw std::invalid_argument(
+                    "expected_returns size (" + std::to_string(expected_returns.size()) +
+                    ") does not match covariance dimension (" + std::to_string(n) + ")");
+            }
+            if (y_current.size() != n)
+            {
+                throw std::invalid_argument(
+                    "y_current size (" + std::to_string(y_current.size()) +
+                    ") does not match number of assets (" + std::to_string(n) + ")");
+            }
+
+            // Set up quadratic problem: minimize y^T Sigma y
+            QuadraticProblem problem;
+            problem.P = 2.0 * covariance; // follow Schaible subproblem formulation
+            problem.q = Eigen::VectorXd::Zero(n);
+
+            // Equality constraints: (mu - rf)^T y = 1; sum(y) = sum(y_current)
+            problem.A_eq = Eigen::MatrixXd(2, n);
+            problem.b_eq = Eigen::VectorXd(2);
+
+            Eigen::VectorXd mu_minus_rf = expected_returns - Eigen::VectorXd::Constant(n, risk_free_rate);
+            problem.A_eq.row(0) = mu_minus_rf.transpose();
+            problem.b_eq(0) = 1.0;
+
+            problem.A_eq.row(1) = Eigen::RowVectorXd::Ones(n);
+            problem.b_eq(1) = y_current.sum();
+
+            // Box constraints: use simple box [min_weight, max_weight] in y-space
+            problem.lower_bounds = Eigen::VectorXd::Constant(n, constraints.min_weight);
+            problem.upper_bounds = Eigen::VectorXd::Constant(n, constraints.max_weight);
+
+            // Solve with OSQP
+            OSQPSolver solver;
+            SolverOptions options;
+            options.max_iterations = 10000;
+            options.tolerance = 1e-6;
+            options.step_size = 1.0;
+            solver.set_options(options);
+
+            SolverResult solver_result = solver.solve(problem);
+
+            if (!solver_result.success)
+            {
+                throw std::runtime_error(
+                    "Schaible iteration QP failed: " + solver_result.message);
+            }
+
+            return solver_result.solution;
+        }
+
+        bool MeanVarianceOptimizer::check_schaibles_convergence(
+            const Eigen::VectorXd &y_old,
+            const Eigen::VectorXd &y_new,
+            double tolerance) const
+        {
+            // Use L2 norm for relative change
+            const double old_norm = y_old.norm();
+            const double diff_norm = (y_new - y_old).norm();
+
+            if (old_norm < 1e-10)
+            {
+                // Fall back to absolute tolerance when previous vector is (near) zero
+                return diff_norm < tolerance;
+            }
+
+            return (diff_norm / old_norm) < tolerance;
         }
 
     } // namespace optimizer

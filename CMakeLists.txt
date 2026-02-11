@@ -183,10 +183,20 @@ target_link_libraries(test_turnover_constraints PRIVATE
 )
 add_test(NAME TurnoverConstraints COMMAND test_turnover_constraints)
 
+# Schaible iteration tests
+add_executable(test_schaible tests/test_schaible.cpp)
+target_link_libraries(test_schaible PRIVATE
+    optimizer
+    risk
+    data
+    Catch2::Catch2WithMain
+)
+add_test(NAME Schaible COMMAND test_schaible)
+
 # Update run_tests target
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_data_loader test_risk_models test_mean_variance_optimizer
+    DEPENDS test_data_loader test_risk_models test_mean_variance_optimizer test_schaible
     COMMENT "Running all tests..."
 )
 
