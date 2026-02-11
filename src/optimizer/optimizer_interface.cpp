@@ -8,6 +8,8 @@
 #include <iomanip>
 #include <cmath>
 #include <limits>
+#include <set>
+#include <algorithm>
 
 namespace portfolio
 {
@@ -68,6 +70,65 @@ namespace portfolio
 
             constraints.validate();
             return constraints;
+        }
+
+        // ============================================================================
+        // GroupConstraint Implementation
+        // ============================================================================
+
+        void GroupConstraint::validate() const
+        {
+            if (asset_indices.empty())
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' has empty asset_indices");
+            }
+
+            if (min_weight < 0.0 || min_weight > 1.0)
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' has invalid min_weight: " + std::to_string(min_weight));
+            }
+
+            if (max_weight < 0.0 || max_weight > 1.0)
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' has invalid max_weight: " + std::to_string(max_weight));
+            }
+
+            if (min_weight > max_weight)
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' min_weight (" + std::to_string(min_weight) + ") exceeds max_weight (" + std::to_string(max_weight) + ")");
+            }
+
+            // Check duplicates
+            std::set<int> s(asset_indices.begin(), asset_indices.end());
+            if (static_cast<size_t>(s.size()) != asset_indices.size())
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' contains duplicate asset indices");
+            }
+        }
+
+        nlohmann::json GroupConstraint::to_json() const
+        {
+            return nlohmann::json{
+                {"name", name},
+                {"assets", asset_indices},
+                {"min_exposure", min_weight},
+                {"max_exposure", max_weight}
+            };
+        }
+
+        GroupConstraint GroupConstraint::from_json(const nlohmann::json &j)
+        {
+            GroupConstraint gc;
+            // Required fields
+            gc.name = j.at("name").get<std::string>();
+            gc.asset_indices = j.at("assets").get<std::vector<int>>();
+
+            // Optional exposures with defaults
+            gc.min_weight = j.value("min_exposure", 0.0);
+            gc.max_weight = j.value("max_exposure", 1.0);
+
+            gc.validate();
+            return gc;
         }
 
         // ============================================================================

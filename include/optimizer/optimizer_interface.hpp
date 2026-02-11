@@ -35,6 +35,7 @@ namespace portfolio
             bool long_only = true;     ///< No short positions
             bool sum_to_one = true;    ///< Weights sum to 1
             double max_turnover = 1.0; ///< Maximum turnover from current
+            std::vector<struct GroupConstraint> group_constraints; ///< Group exposure constraints
 
             /**
              * @brief Validate constraints
@@ -46,6 +47,38 @@ namespace portfolio
              * @brief Create from JSON configuration
              */
             static OptimizationConstraints from_json(const nlohmann::json &j);
+        };
+
+        /**
+         * @struct GroupConstraint
+         * @brief Constraint on a group of assets (sector, industry, factor, etc.)
+         *
+         * Enforces: min_weight <= sum(w_i : i in asset_indices) <= max_weight
+         *
+         * Example: GroupConstraint{"Technology", {0,1,2,3}, 0.20, 0.35}
+         *          ensures 20-35% allocation to assets 0,1,2,3 (Tech sector)
+         */
+        struct GroupConstraint {
+            std::string name;                ///< Group name (e.g., "Technology Sector")
+            std::vector<int> asset_indices;  ///< Asset indices in this group
+            double min_weight;               ///< Minimum total weight (e.g., 0.20 = 20%)
+            double max_weight;               ///< Maximum total weight (e.g., 0.35 = 35%)
+
+            /**
+             * @brief Validate constraint
+             * @throws std::invalid_argument if invalid
+             */
+            void validate() const;
+
+            /**
+             * @brief Convert to JSON
+             */
+            nlohmann::json to_json() const;
+
+            /**
+             * @brief Create from JSON
+             */
+            static GroupConstraint from_json(const nlohmann::json& j);
         };
 
         /**
