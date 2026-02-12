@@ -151,6 +151,28 @@ namespace portfolio
             problem.P = covariance;
             problem.q = Eigen::VectorXd::Zero(n);
 
+            // Tracking error (soft penalty) integration
+            if (constraints.benchmark_weights.size() > 0)
+            {
+                if (constraints.benchmark_weights.size() != n)
+                {
+                    throw std::invalid_argument(
+                        "benchmark_weights size mismatch: " + std::to_string(constraints.benchmark_weights.size()) +
+                        " vs " + std::to_string(n));
+                }
+
+                double penalty = constraints.tracking_error_penalty;
+                if (penalty <= 0.0)
+                {
+                    penalty = constraints.compute_tracking_error_penalty(covariance);
+                }
+
+                // QuadraticProblem uses objective (1/2) x^T P x + q^T x
+                // We need to add lambda_te * w^T Sigma w -> P += 2 * lambda_te * Sigma
+                problem.P += 2.0 * penalty * covariance;
+                problem.q -= 2.0 * penalty * covariance * constraints.benchmark_weights;
+            }
+
             // Equality constraint: sum(w) = 1
             if (constraints.sum_to_one)
             {
@@ -258,6 +280,26 @@ namespace portfolio
             problem.P = covariance;
             problem.q = Eigen::VectorXd::Zero(n);
 
+            // Tracking error (soft penalty) integration
+            if (constraints.benchmark_weights.size() > 0)
+            {
+                if (constraints.benchmark_weights.size() != n)
+                {
+                    throw std::invalid_argument(
+                        "benchmark_weights size mismatch: " + std::to_string(constraints.benchmark_weights.size()) +
+                        " vs " + std::to_string(n));
+                }
+
+                double penalty = constraints.tracking_error_penalty;
+                if (penalty <= 0.0)
+                {
+                    penalty = constraints.compute_tracking_error_penalty(covariance);
+                }
+
+                problem.P += 2.0 * penalty * covariance;
+                problem.q -= 2.0 * penalty * covariance * constraints.benchmark_weights;
+            }
+
             // Equality constraints
             int n_eq = constraints.sum_to_one ? 2 : 1;
             problem.A_eq = Eigen::MatrixXd(n_eq, n);
@@ -314,6 +356,26 @@ namespace portfolio
             QuadraticProblem problem;
             problem.P = covariance;
             problem.q = -expected_returns / risk_aversion_;
+
+            // Tracking error (soft penalty) integration
+            if (constraints.benchmark_weights.size() > 0)
+            {
+                if (constraints.benchmark_weights.size() != n)
+                {
+                    throw std::invalid_argument(
+                        "benchmark_weights size mismatch: " + std::to_string(constraints.benchmark_weights.size()) +
+                        " vs " + std::to_string(n));
+                }
+
+                double penalty = constraints.tracking_error_penalty;
+                if (penalty <= 0.0)
+                {
+                    penalty = constraints.compute_tracking_error_penalty(covariance);
+                }
+
+                problem.P += 2.0 * penalty * covariance;
+                problem.q -= 2.0 * penalty * covariance * constraints.benchmark_weights;
+            }
 
             // Equality constraint: sum(w) = 1
             if (constraints.sum_to_one)
@@ -563,6 +625,28 @@ namespace portfolio
             QuadraticProblem problem;
             problem.P = 2.0 * covariance; // follow Schaible subproblem formulation
             problem.q = Eigen::VectorXd::Zero(n);
+
+            // Integrate tracking error penalty (if any). Note: P already set to 2*Sigma
+            if (constraints.benchmark_weights.size() > 0)
+            {
+                if (constraints.benchmark_weights.size() != n)
+                {
+                    throw std::invalid_argument(
+                        "benchmark_weights size mismatch: " + std::to_string(constraints.benchmark_weights.size()) +
+                        " vs " + std::to_string(n));
+                }
+
+                double penalty = constraints.tracking_error_penalty;
+                if (penalty <= 0.0)
+                {
+                    penalty = constraints.compute_tracking_error_penalty(covariance);
+                }
+
+                // Here objective is y^T Sigma y represented by (1/2) y^T P y with P=2*Sigma
+                // Adding lambda_te * y^T Sigma y requires adding 2*lambda_te*Sigma to P
+                problem.P += 2.0 * penalty * covariance;
+                problem.q -= 2.0 * penalty * covariance * constraints.benchmark_weights;
+            }
 
             // Equality constraints: (mu - rf)^T y = 1; sum(y) = sum(y_current)
             problem.A_eq = Eigen::MatrixXd(2, n);

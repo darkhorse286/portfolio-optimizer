@@ -9,7 +9,7 @@
  *
  * Minimize:     (1/2) * x^T * P * x + q^T * x
  * Subject to:   A_eq * x = b_eq      (equality constraints)
- *              A_ineq * x <= b_ineq  (inequality constraints)
+ *              b_lower <= A_ineq * x <= b_upper  (inequality constraints with bounds)
  *              l <= x <= u           (box constraints)
  *
  * Algorithm: Active set method with projected gradient descent
@@ -42,7 +42,8 @@ namespace portfolio
             Eigen::VectorXd b_eq; ///< Equality constraint values
 
             Eigen::MatrixXd A_ineq; ///< Inequality constraint matrix
-            Eigen::VectorXd b_ineq; ///< Inequality constraint values
+            Eigen::VectorXd b_ineq_lower; ///< Inequality lower bounds (for A_ineq * x)
+            Eigen::VectorXd b_ineq_upper; ///< Inequality upper bounds (for A_ineq * x)
 
             Eigen::VectorXd lower_bounds; ///< Lower bounds
             Eigen::VectorXd upper_bounds; ///< Upper bounds

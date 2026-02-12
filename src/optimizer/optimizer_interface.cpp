@@ -56,6 +56,24 @@ namespace portfolio
                 throw std::invalid_argument(
                     "Infeasible constraints: min_weight > 1.0 with sum_to_one constraint");
             }
+
+            // Tracking error validation
+            if (benchmark_weights.size() > 0)
+            {
+                if (max_tracking_error <= 0.0)
+                {
+                    throw std::invalid_argument(
+                        "max_tracking_error must be positive when benchmark_weights provided: " +
+                        std::to_string(max_tracking_error));
+                }
+
+                // Warn if benchmark doesn't sum to 1 (tolerate small numerical differences)
+                double sum = benchmark_weights.sum();
+                if (std::abs(sum - 1.0) > 0.01)
+                {
+                    std::cerr << "Warning: benchmark_weights sum to " << sum << "\n";
+                }
+            }
         }
 
         OptimizationConstraints OptimizationConstraints::from_json(const nlohmann::json &j)
@@ -68,8 +86,48 @@ namespace portfolio
             constraints.sum_to_one = j.value("sum_to_one", true);
             constraints.max_turnover = j.value("max_turnover", 1.0);
 
+            // Optional tracking error fields
+            if (j.contains("benchmark_weights"))
+            {
+                std::vector<double> bw = j.at("benchmark_weights").get<std::vector<double>>();
+                constraints.benchmark_weights = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(bw.size()));
+                for (size_t i = 0; i < bw.size(); ++i)
+                {
+                    constraints.benchmark_weights(static_cast<Eigen::Index>(i)) = bw[i];
+                }
+            }
+
+            constraints.max_tracking_error = j.value("max_tracking_error", 0.0);
+            constraints.tracking_error_penalty = j.value("tracking_error_penalty", 0.0);
+
             constraints.validate();
             return constraints;
+        }
+
+        double OptimizationConstraints::compute_tracking_error_penalty(const Eigen::MatrixXd& covariance) const
+        {
+            if (max_tracking_error <= 0.0)
+            {
+                throw std::invalid_argument("max_tracking_error must be positive to compute penalty");
+            }
+
+            const Eigen::Index n = covariance.rows();
+            if (n <= 0 || covariance.cols() != n)
+            {
+                throw std::invalid_argument("Covariance must be non-empty square matrix for penalty computation");
+            }
+
+            double trace = covariance.trace();
+            if (trace <= 0.0)
+            {
+                throw std::invalid_argument("Covariance trace must be positive to compute penalty");
+            }
+
+            // Heuristic: penalty inversely proportional to target TE^2
+            // Formula: 1.0 / (max_tracking_error^2 * trace(Σ) / n)
+            double avg_var = trace / static_cast<double>(n);
+            double penalty = 1.0 / (max_tracking_error * max_tracking_error * avg_var);
+            return penalty;
         }
 
         // ============================================================================

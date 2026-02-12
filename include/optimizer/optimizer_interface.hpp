@@ -37,6 +37,11 @@ namespace portfolio
             double max_turnover = 1.0; ///< Maximum turnover from current
             std::vector<struct GroupConstraint> group_constraints; ///< Group exposure constraints
 
+            // NEW: Tracking error constraint (soft via penalty)
+            Eigen::VectorXd benchmark_weights;  ///< Benchmark (empty = no TE constraint)
+            double max_tracking_error = 0.0;    ///< Target TE threshold
+            double tracking_error_penalty = 0.0;///< Penalty coefficient (auto-tune if <= 0)
+
             /**
              * @brief Validate constraints
              * @throws std::invalid_argument if constraints are inconsistent
@@ -47,6 +52,13 @@ namespace portfolio
              * @brief Create from JSON configuration
              */
             static OptimizationConstraints from_json(const nlohmann::json &j);
+
+            /**
+             * @brief Compute penalty coefficient for tracking error
+             * @param covariance Asset covariance matrix
+             * @return Tuned penalty coefficient
+             */
+            double compute_tracking_error_penalty(const Eigen::MatrixXd& covariance) const;
         };
 
         /**
