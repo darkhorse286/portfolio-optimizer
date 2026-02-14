@@ -21,7 +21,7 @@
       "CVX"
     ],
     "benchmark": "SPY",
-    "data_file": "../data/market/historical_prices.csv",
+    "data_file": "data/market/historical_prices.csv",
     "frequency": "daily"
   },
   

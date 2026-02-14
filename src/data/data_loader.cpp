@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <set>
 #include <map>
+#include <filesystem>
 
 namespace portfolio
 {
@@ -411,6 +412,27 @@ namespace portfolio
         if (j.contains("backtest"))
         {
             config.backtest = BacktestConfig::from_json(j["backtest"]);
+        }
+
+        // Resolve relative paths in data config relative to the config file location
+        try {
+            std::filesystem::path df(config.data.data_file);
+            // If file exists as provided (relative to current working dir or absolute), keep it
+            if (!config.data.data_file.empty() && std::filesystem::exists(df)) {
+                // keep as-is
+            } else {
+                // Otherwise try resolving relative to config file directory
+                std::filesystem::path cfg_path(config_path);
+                auto cfg_dir = cfg_path.parent_path();
+                if (!config.data.data_file.empty()) {
+                    std::filesystem::path candidate = (cfg_dir / df).lexically_normal();
+                    if (std::filesystem::exists(candidate)) {
+                        config.data.data_file = candidate.string();
+                    }
+                }
+            }
+        } catch (const std::exception &e) {
+            // Non-fatal: keep original data_file if filesystem resolution fails
         }
 
         return config;
