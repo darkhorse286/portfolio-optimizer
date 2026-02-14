@@ -48,6 +48,21 @@ namespace portfolio
         };
 
         /**
+         * @enum MaxSharpeMethod
+         * @brief Method selection for Max Sharpe optimization
+         *
+         * - GRID_SEARCH: fallback to grid search over risk aversion
+         * - DIRECT: use Schaible's direct fractional programming
+         * - HYBRID: coarse grid then Schaible refinement
+         */
+        enum class MaxSharpeMethod
+        {
+            GRID_SEARCH,
+            DIRECT,
+            HYBRID
+        };
+
+        /**
          * @class MeanVarianceOptimizer
          * @brief Markowitz mean-variance portfolio optimizer
          *
@@ -160,6 +175,7 @@ namespace portfolio
             double risk_free_rate_;   ///< Risk-free rate
             double risk_aversion_;    ///< Risk aversion parameter
             double target_return_;    ///< Target return
+            MaxSharpeMethod max_sharpe_method_ = MaxSharpeMethod::HYBRID; ///< Default method
 
             /**
              * @brief Optimize for minimum variance
@@ -221,6 +237,64 @@ namespace portfolio
                 const Eigen::VectorXd &current_weights,
                 Eigen::VectorXd &lower_bounds,
                 Eigen::VectorXd &upper_bounds) const;
+
+            /**
+             * @brief Single iteration of Schaible's algorithm for fractional programming
+             * @param y_current Current y vector (scaled weights)
+             * @param expected_returns Expected returns vector (mu)
+             * @param covariance Covariance matrix (Sigma)
+             * @param constraints Portfolio constraints (box, turnover)
+             * @param risk_free_rate Risk-free rate used in Sharpe numerator
+             * @return Updated y vector from QP subproblem
+             * @throws std::invalid_argument on dimension mismatch
+             * @throws std::runtime_error if QP solver fails
+             *
+             * Implements one Schaible iteration which solves a QP:
+             *   min_y y^T Sigma y
+             *   s.t. (mu - rf)^T y = 1
+             *        sum(y) = sum(y_current)
+             *        box constraints
+             */
+            Eigen::VectorXd schaibles_iteration(
+                const Eigen::VectorXd &y_current,
+                const Eigen::VectorXd &expected_returns,
+                const Eigen::MatrixXd &covariance,
+                const OptimizationConstraints &constraints,
+                double risk_free_rate) const;
+
+            /**
+             * @brief Check convergence of Schaible iterations
+             * @param y_old Previous iteration y vector
+             * @param y_new New iteration y vector
+             * @param tolerance Relative tolerance threshold
+             * @return true if ||y_new - y_old|| / ||y_old|| < tolerance
+             *
+             * When the norm of `y_old` is extremely small (< 1e-10), falls
+             * back to an absolute comparison on the difference norm.
+             */
+            bool check_schaibles_convergence(
+                const Eigen::VectorXd &y_old,
+                const Eigen::VectorXd &y_new,
+                double tolerance) const;
+
+        public:
+            /**
+             * @brief Direct/hybrid Max Sharpe optimizer using Schaible's method
+             * @param expected_returns Expected returns vector
+             * @param covariance Covariance matrix
+             * @param constraints Portfolio constraints
+             * @param current_weights Current weights (for turnover)
+             * @return OptimizationResult with calculated metrics
+             *
+             * Implements a hybrid approach: a coarse grid search for robust
+             * initialization followed by Schaible iterative refinement. Falls
+             * back to grid search on failures.
+             */
+            OptimizationResult optimize_max_sharpe_direct(
+                const Eigen::VectorXd &expected_returns,
+                const Eigen::MatrixXd &covariance,
+                const OptimizationConstraints &constraints,
+                const Eigen::VectorXd &current_weights = Eigen::VectorXd()) const;
         };
 
     } // namespace optimizer

@@ -69,10 +69,11 @@ namespace portfolio
             std::vector<OSQPFloat> &u) const
         {
             const int n = problem.q.size();
-            const int n_eq = problem.A_eq.rows();
+            const int n_eq = (problem.A_eq.size() > 0) ? problem.A_eq.rows() : 0;
+            const int n_ineq = (problem.A_ineq.size() > 0) ? problem.A_ineq.rows() : 0;
 
-            // Total constraints: n_eq equality + n lower bounds + n upper bounds
-            const int m = n_eq + n + n;
+            // Total constraints: n_eq equality + n_ineq inequality + n lower bounds + n upper bounds
+            const int m = n_eq + n_ineq + n + n;
 
             A_data.clear();
             A_indices.clear();
@@ -96,13 +97,24 @@ namespace portfolio
                     }
                 }
 
-                // 2. Lower bound constraint: x_j >= lb_j
-                A_data.push_back(1.0);
-                A_indices.push_back(n_eq + j);
+                // 2. Inequality constraints: A_ineq * x <= b_ineq_upper and >= b_ineq_lower
+                for (int i = 0; i < n_ineq; ++i)
+                {
+                    double val = problem.A_ineq(i, j);
+                    if (std::abs(val) > 1e-14)
+                    {
+                        A_data.push_back(val);
+                        A_indices.push_back(n_eq + i);
+                    }
+                }
 
-                // 3. Upper bound constraint: x_j <= ub_j
+                // 3. Lower bound constraint row for x_j: x_j >= lb_j
                 A_data.push_back(1.0);
-                A_indices.push_back(n_eq + n + j);
+                A_indices.push_back(n_eq + n_ineq + j);
+
+                // 4. Upper bound constraint row for x_j: x_j <= ub_j
+                A_data.push_back(1.0);
+                A_indices.push_back(n_eq + n_ineq + n + j);
 
                 A_indptr.push_back(A_data.size());
             }
@@ -115,18 +127,25 @@ namespace portfolio
                 u[i] = problem.b_eq(i);
             }
 
+            // Inequality constraints: l = b_ineq_lower, u = b_ineq_upper
+            for (int i = 0; i < n_ineq; ++i)
+            {
+                l[n_eq + i] = (problem.b_ineq_lower.size() > 0) ? problem.b_ineq_lower(i) : -OSQP_INFTY;
+                u[n_eq + i] = (problem.b_ineq_upper.size() > 0) ? problem.b_ineq_upper(i) : OSQP_INFTY;
+            }
+
             // Lower bounds: x >= lb
             for (int i = 0; i < n; ++i)
             {
-                l[n_eq + i] = problem.lower_bounds(i);
-                u[n_eq + i] = OSQP_INFTY;
+                l[n_eq + n_ineq + i] = problem.lower_bounds(i);
+                u[n_eq + n_ineq + i] = OSQP_INFTY;
             }
 
             // Upper bounds: x <= ub
             for (int i = 0; i < n; ++i)
             {
-                l[n_eq + n + i] = -OSQP_INFTY;
-                u[n_eq + n + i] = problem.upper_bounds(i);
+                l[n_eq + n_ineq + n + i] = -OSQP_INFTY;
+                u[n_eq + n_ineq + n + i] = problem.upper_bounds(i);
             }
 
             return m;

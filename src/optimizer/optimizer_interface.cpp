@@ -8,6 +8,8 @@
 #include <iomanip>
 #include <cmath>
 #include <limits>
+#include <set>
+#include <algorithm>
 
 namespace portfolio
 {
@@ -54,6 +56,24 @@ namespace portfolio
                 throw std::invalid_argument(
                     "Infeasible constraints: min_weight > 1.0 with sum_to_one constraint");
             }
+
+            // Tracking error validation
+            if (benchmark_weights.size() > 0)
+            {
+                if (max_tracking_error <= 0.0)
+                {
+                    throw std::invalid_argument(
+                        "max_tracking_error must be positive when benchmark_weights provided: " +
+                        std::to_string(max_tracking_error));
+                }
+
+                // Warn if benchmark doesn't sum to 1 (tolerate small numerical differences)
+                double sum = benchmark_weights.sum();
+                if (std::abs(sum - 1.0) > 0.01)
+                {
+                    std::cerr << "Warning: benchmark_weights sum to " << sum << "\n";
+                }
+            }
         }
 
         OptimizationConstraints OptimizationConstraints::from_json(const nlohmann::json &j)
@@ -66,8 +86,107 @@ namespace portfolio
             constraints.sum_to_one = j.value("sum_to_one", true);
             constraints.max_turnover = j.value("max_turnover", 1.0);
 
+            // Optional tracking error fields
+            if (j.contains("benchmark_weights"))
+            {
+                std::vector<double> bw = j.at("benchmark_weights").get<std::vector<double>>();
+                constraints.benchmark_weights = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(bw.size()));
+                for (size_t i = 0; i < bw.size(); ++i)
+                {
+                    constraints.benchmark_weights(static_cast<Eigen::Index>(i)) = bw[i];
+                }
+            }
+
+            constraints.max_tracking_error = j.value("max_tracking_error", 0.0);
+            constraints.tracking_error_penalty = j.value("tracking_error_penalty", 0.0);
+
             constraints.validate();
             return constraints;
+        }
+
+        double OptimizationConstraints::compute_tracking_error_penalty(const Eigen::MatrixXd& covariance) const
+        {
+            if (max_tracking_error <= 0.0)
+            {
+                throw std::invalid_argument("max_tracking_error must be positive to compute penalty");
+            }
+
+            const Eigen::Index n = covariance.rows();
+            if (n <= 0 || covariance.cols() != n)
+            {
+                throw std::invalid_argument("Covariance must be non-empty square matrix for penalty computation");
+            }
+
+            double trace = covariance.trace();
+            if (trace <= 0.0)
+            {
+                throw std::invalid_argument("Covariance trace must be positive to compute penalty");
+            }
+
+            // Heuristic: penalty inversely proportional to target TE^2
+            // Formula: 1.0 / (max_tracking_error^2 * trace(Σ) / n)
+            double avg_var = trace / static_cast<double>(n);
+            double penalty = 1.0 / (max_tracking_error * max_tracking_error * avg_var);
+            return penalty;
+        }
+
+        // ============================================================================
+        // GroupConstraint Implementation
+        // ============================================================================
+
+        void GroupConstraint::validate() const
+        {
+            if (asset_indices.empty())
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' has empty asset_indices");
+            }
+
+            if (min_weight < 0.0 || min_weight > 1.0)
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' has invalid min_weight: " + std::to_string(min_weight));
+            }
+
+            if (max_weight < 0.0 || max_weight > 1.0)
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' has invalid max_weight: " + std::to_string(max_weight));
+            }
+
+            if (min_weight > max_weight)
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' min_weight (" + std::to_string(min_weight) + ") exceeds max_weight (" + std::to_string(max_weight) + ")");
+            }
+
+            // Check duplicates
+            std::set<int> s(asset_indices.begin(), asset_indices.end());
+            if (static_cast<size_t>(s.size()) != asset_indices.size())
+            {
+                throw std::invalid_argument("GroupConstraint '" + name + "' contains duplicate asset indices");
+            }
+        }
+
+        nlohmann::json GroupConstraint::to_json() const
+        {
+            return nlohmann::json{
+                {"name", name},
+                {"assets", asset_indices},
+                {"min_exposure", min_weight},
+                {"max_exposure", max_weight}
+            };
+        }
+
+        GroupConstraint GroupConstraint::from_json(const nlohmann::json &j)
+        {
+            GroupConstraint gc;
+            // Required fields
+            gc.name = j.at("name").get<std::string>();
+            gc.asset_indices = j.at("assets").get<std::vector<int>>();
+
+            // Optional exposures with defaults
+            gc.min_weight = j.value("min_exposure", 0.0);
+            gc.max_weight = j.value("max_exposure", 1.0);
+
+            gc.validate();
+            return gc;
         }
 
         // ============================================================================

@@ -60,18 +60,18 @@ namespace portfolio
                 }
             }
 
-            // Check inequality constraints
+            // Check inequality constraints (with lower and upper bounds)
             if (A_ineq.rows() > 0)
             {
                 if (A_ineq.cols() != n)
                 {
                     throw std::invalid_argument("A_ineq columns do not match problem dimension");
                 }
-                if (b_ineq.size() != A_ineq.rows())
+                if (b_ineq_lower.size() != A_ineq.rows() || b_ineq_upper.size() != A_ineq.rows())
                 {
-                    throw std::invalid_argument("b_ineq size does not match A_ineq rows");
+                    throw std::invalid_argument("Inequality bounds size does not match A_ineq rows");
                 }
-                if (!A_ineq.allFinite() || !b_ineq.allFinite())
+                if (!A_ineq.allFinite() || !b_ineq_lower.allFinite() || !b_ineq_upper.allFinite())
                 {
                     throw std::invalid_argument("Inequality constraints contain NaN or Inf");
                 }

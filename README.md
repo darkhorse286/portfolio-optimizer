@@ -11,12 +11,21 @@ A high-performance C++ portfolio optimization library implementing modern portfo
 - **Mean-Variance Optimization**: Markowitz portfolio optimization with OSQP solver
 - **Efficient Frontier**: Complete Pareto-optimal frontier computation
 - **Turnover Constraints**: Per-asset position change limits
+ - **Tracking Error (soft penalty)**: Benchmark-relative penalty-based constraint
+ - **Tracking Error (soft penalty)**: Benchmark-relative penalty-based constraint
+ - **Direct Max Sharpe (Schaible's refinement)**: Fractional programming refinement for direct Max-Sharpe
+ - **Sector / Group Constraints**: `SectorMapping` helper and `GroupConstraint` support
+ - **Inequality Constraints**: Partial support for inequality constraints via `A_ineq` in QP
 - **Build System**: CMake with Docker support
 - **Testing**: Comprehensive test suite with Catch2 (65 tests, 100% passing)
+ - **Testing**: Comprehensive test suite with Catch2 (coverage expanded for FS 2.3)
 
-### In Development
+### Feature Set 2.3 (Completed)
 
-- Feature Set 2.3: Advanced constraints and direct optimization methods
+- Tracking Error soft-constraint (penalty method) for benchmark-relative portfolios
+- Integration of tracking-error penalty into all mean-variance objectives
+- Auto-tuning heuristic for penalty coefficient
+- Unit tests covering tracking-error behavior and validation
 
 ### Planned
 
