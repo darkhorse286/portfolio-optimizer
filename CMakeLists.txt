@@ -121,6 +121,27 @@ if(nlohmann_json_FOUND)
 endif()
 
 # =======================
+# Backtest Library
+# =======================
+file(GLOB_RECURSE BACKTEST_SOURCES "src/backtest/*.cpp")
+if(BACKTEST_SOURCES)
+    add_library(backtest ${BACKTEST_SOURCES})
+    target_include_directories(backtest PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+        ${EIGEN3_INCLUDE_DIR}
+    )
+    target_link_libraries(backtest PUBLIC
+        Eigen3::Eigen
+        data
+        risk
+        optimizer
+    )
+    if(nlohmann_json_FOUND)
+        target_link_libraries(backtest PUBLIC nlohmann_json::nlohmann_json)
+    endif()
+endif()
+
+# =======================
 # Testing with Catch2
 # =======================
 include(FetchContent)
@@ -136,75 +157,39 @@ FetchContent_MakeAvailable(Catch2)
 # Enable testing
 enable_testing()
 
-# Data layer tests
-add_executable(test_data_loader tests/test_data_loader.cpp)
-target_link_libraries(test_data_loader PRIVATE 
-    data
-    risk
-    Catch2::Catch2WithMain
-)
-add_test(NAME DataLoader COMMAND test_data_loader)
+# Discover and register all tests in tests/ directory
+file(GLOB TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/*.cpp")
+set(ALL_TEST_TARGETS "")
 
-# Risk model tests
-add_executable(test_risk_models tests/test_risk_models.cpp)
-target_link_libraries(test_risk_models PRIVATE 
-    risk
-    Catch2::Catch2WithMain
-)
-add_test(NAME RiskModels COMMAND test_risk_models)
+# Common test libraries (conditionally append existing targets)
+set(TEST_LIBS Catch2::Catch2WithMain Eigen3::Eigen)
+if(TARGET data)
+    list(APPEND TEST_LIBS data)
+endif()
+if(TARGET risk)
+    list(APPEND TEST_LIBS risk)
+endif()
+if(TARGET optimizer)
+    list(APPEND TEST_LIBS optimizer)
+endif()
+if(TARGET backtest)
+    list(APPEND TEST_LIBS backtest)
+endif()
 
-# Optimizer tests
-add_executable(test_mean_variance_optimizer tests/test_mean_variance_optimizer.cpp)
-target_link_libraries(test_mean_variance_optimizer PRIVATE 
-    optimizer
-    risk
-    data
-    Catch2::Catch2WithMain
-)
-add_test(NAME MeanVarianceOptimizer COMMAND test_mean_variance_optimizer)
+foreach(test_src ${TEST_SOURCES})
+    get_filename_component(test_name ${test_src} NAME_WE)
+    set(target_name test_${test_name})
+    add_executable(${target_name} ${test_src})
+    target_include_directories(${target_name} PRIVATE ${CMAKE_SOURCE_DIR}/include ${EIGEN3_INCLUDE_DIR})
+    target_link_libraries(${target_name} PRIVATE ${TEST_LIBS})
+    add_test(NAME ${test_name} COMMAND ${target_name})
+    list(APPEND ALL_TEST_TARGETS ${target_name})
+endforeach()
 
-# Efficient Frontier Tests
-add_executable(test_efficient_frontier tests/test_efficient_frontier.cpp)
-target_link_libraries(test_efficient_frontier PRIVATE
-    optimizer
-    risk
-    data
-    Catch2::Catch2WithMain
-)
-add_test(NAME EfficientFrontier COMMAND test_efficient_frontier)
-
-# Turnover constraint tests
-add_executable(test_turnover_constraints tests/test_turnover_constraints.cpp)
-target_link_libraries(test_turnover_constraints PRIVATE
-    optimizer
-    risk
-    data
-    Catch2::Catch2WithMain
-)
-add_test(NAME TurnoverConstraints COMMAND test_turnover_constraints)
-
-# Schaible iteration tests
-add_executable(test_schaible tests/test_schaible.cpp)
-target_link_libraries(test_schaible PRIVATE
-    optimizer
-    risk
-    data
-    Catch2::Catch2WithMain
-)
-add_test(NAME Schaible COMMAND test_schaible)
-
-# OSQP inequality test
-add_executable(test_osqp_inequality tests/test_osqp_inequality.cpp)
-target_link_libraries(test_osqp_inequality PRIVATE
-    optimizer
-    Catch2::Catch2WithMain
-)
-add_test(NAME OSQP_Inequality COMMAND test_osqp_inequality)
-
-# Update run_tests target
+# Aggregate run_tests target
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_data_loader test_risk_models test_mean_variance_optimizer test_schaible test_osqp_inequality
+    DEPENDS ${ALL_TEST_TARGETS}
     COMMENT "Running all tests..."
 )
 
