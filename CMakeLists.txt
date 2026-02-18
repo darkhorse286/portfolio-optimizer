@@ -1,6 +1,6 @@
 # Portfolio Optimizer - CMakeLists.txt
 cmake_minimum_required(VERSION 3.15)
-project(PortfolioOptimizer VERSION 1.0.0 LANGUAGES CXX)
+project(PortfolioOptimizer VERSION 1.6.0 LANGUAGES CXX)
 
 # C++ Standard
 set(CMAKE_CXX_STANDARD 17)
@@ -101,25 +101,6 @@ if(nlohmann_json_FOUND)
     target_link_libraries(optimizer PUBLIC nlohmann_json::nlohmann_json)
 endif()
 
-# ===================
-# Main Executable
-# ===================
-add_executable(portfolio_optimizer src/main.cpp)
-target_include_directories(portfolio_optimizer PRIVATE 
-    ${CMAKE_SOURCE_DIR}/include
-    ${EIGEN3_INCLUDE_DIR}
-)
-target_link_libraries(portfolio_optimizer PRIVATE 
-    data
-    risk
-    optimizer
-    Eigen3::Eigen
-)
-
-if(nlohmann_json_FOUND)
-    target_link_libraries(portfolio_optimizer PRIVATE nlohmann_json::nlohmann_json)
-endif()
-
 # =======================
 # Backtest Library
 # =======================
@@ -139,6 +120,44 @@ if(BACKTEST_SOURCES)
     if(nlohmann_json_FOUND)
         target_link_libraries(backtest PUBLIC nlohmann_json::nlohmann_json)
     endif()
+endif()
+
+# ==========================
+# Analytics Library
+# ==========================
+file(GLOB_RECURSE ANALYTICS_SOURCES "src/analytics/*.cpp")
+if(ANALYTICS_SOURCES)
+    add_library(analytics ${ANALYTICS_SOURCES})
+    target_include_directories(analytics PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    target_link_libraries(analytics PUBLIC
+        backtest
+    )
+    if(nlohmann_json_FOUND)
+        target_link_libraries(analytics PUBLIC nlohmann_json::nlohmann_json)
+    endif()
+endif()
+
+# ===================
+# Main Executable
+# ===================
+add_executable(portfolio_optimizer src/main.cpp)
+target_include_directories(portfolio_optimizer PRIVATE 
+    ${CMAKE_SOURCE_DIR}/include
+    ${EIGEN3_INCLUDE_DIR}
+)
+target_link_libraries(portfolio_optimizer PRIVATE 
+    data
+    risk
+    optimizer
+    backtest
+    analytics
+    Eigen3::Eigen
+)
+
+if(nlohmann_json_FOUND)
+    target_link_libraries(portfolio_optimizer PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
 # =======================
@@ -174,6 +193,9 @@ if(TARGET optimizer)
 endif()
 if(TARGET backtest)
     list(APPEND TEST_LIBS backtest)
+endif()
+if(TARGET analytics)
+    list(APPEND TEST_LIBS analytics)
 endif()
 
 foreach(test_src ${TEST_SOURCES})
@@ -214,5 +236,7 @@ message(STATUS "Libraries:")
 message(STATUS "  - Data layer: ENABLED")
 message(STATUS "  - Risk models: ENABLED")
 message(STATUS "  - Optimizer: ENABLED")
+message(STATUS "  - Backtest: ENABLED")
+message(STATUS "  - Analytics: ENABLED")
 message(STATUS "=============================")
 message(STATUS "")

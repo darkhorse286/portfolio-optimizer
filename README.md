@@ -16,24 +16,24 @@ A high-performance C++ portfolio optimization library implementing modern portfo
 - **Sector / Group Constraints**: `SectorMapping` helper and `GroupConstraint` support
 - **Inequality Constraints**: Partial support for inequality constraints via `A_ineq` in QP
 - **Backtesting Engine**: Walk-forward simulation with transaction costs, rebalancing, and trade logging
+- **Performance Analytics**: Comprehensive return, risk, risk-adjusted, benchmark, rolling, drawdown, and attribution analysis
 - **Build System**: CMake with Docker support
-- **Testing**: Comprehensive test suite with Catch2 (87+ tests, 100% passing)
+- **Testing**: Comprehensive test suite with Catch2 (157+ tests, 100% passing)
 
-### Feature Set 3: Backtesting Engine (Completed)
+### Feature Set 4: Performance Analytics (Completed)
 
-- Walk-forward backtesting engine with configurable lookback windows
-- Portfolio state management with position tracking, cash accounting, and NAV computation
-- Transaction cost modeling: commissions, slippage (bps), and market impact (linear, sqrt, none)
-- Flexible rebalancing: calendar-based (daily, weekly, monthly, quarterly, annually) and drift-threshold triggers
-- Minimum days between rebalances to prevent excessive trading
-- Trade logging with per-trade and per-rebalance recording, CSV export, and summary statistics
-- Backtest result analytics: total return, annualized return, annualized volatility, Sharpe ratio, max drawdown
-- NAV series export to CSV for external analysis
-- Integration with risk model and optimizer layers for end-to-end backtesting
+- Core metrics: total return, CAGR, rolling returns, monthly return table, annualized volatility, downside deviation, skewness, kurtosis
+- Risk metrics: maximum drawdown with full event detail, Value at Risk (historical and parametric), Conditional VaR / Expected Shortfall
+- Risk-adjusted metrics: Sharpe ratio, Sortino ratio, Calmar ratio, Omega ratio
+- Drawdown analysis: discrete event identification (peak-trough-recovery cycles), top-N extraction, aggregate statistics, underwater curve
+- Benchmark analysis: CAPM regression (alpha, beta, R-squared), tracking error, information ratio, active return, up/down capture ratios
+- Rolling statistics: rolling window computations for volatility, Sharpe, Sortino, max drawdown, beta, tracking error, skewness, kurtosis, plus generic `apply()` for custom functions
+- Performance attribution: Brinson-Fachler single-period decomposition (allocation, selection, interaction effects), multi-period Carino logarithmic linking
+- Integration with `BacktestResult` via `compute_analytics()` for seamless end-to-end analysis
+- Export to JSON and CSV from both standalone analytics and backtest results
 
 ### Planned
 
-- Feature Set 4: Performance analytics and attribution
 - Feature Set 5: Visualization and reporting
 - Feature Set 6: Quantum optimization (classical vs quantum algorithm comparison)
 
@@ -57,17 +57,25 @@ portfolio-optimizer/
 │   │   ├── efficient_frontier.hpp
 │   │   ├── osqp_solver.hpp
 │   │   └── quadratic_solver.hpp
-│   └── backtest/                # Backtesting engine (complete)
-│       ├── backtest_engine.hpp
-│       ├── portfolio.hpp
-│       ├── rebalance_scheduler.hpp
-│       ├── trade_logger.hpp
-│       └── transaction_cost_model.hpp
+│   ├── backtest/                # Backtesting engine (complete)
+│   │   ├── backtest_engine.hpp
+│   │   ├── backtest_result.hpp
+│   │   ├── portfolio.hpp
+│   │   ├── rebalance_scheduler.hpp
+│   │   ├── trade_logger.hpp
+│   │   └── transaction_cost_model.hpp
+│   └── analytics/               # Performance analytics (complete)
+│       ├── performance_metrics.hpp
+│       ├── drawdown_analysis.hpp
+│       ├── benchmark_analysis.hpp
+│       ├── rolling_statistics.hpp
+│       └── attribution.hpp
 ├── src/
 │   ├── data/
 │   ├── risk/
 │   ├── optimizer/
-│   └── backtest/
+│   ├── backtest/
+│   └── analytics/
 ├── tests/
 ├── data/config/
 ├── docs/
@@ -82,6 +90,7 @@ namespace portfolio {
     namespace risk { }        // Risk model estimation
     namespace optimizer { }   // Portfolio optimization
     namespace backtest { }    // Backtesting engine
+    namespace analytics { }   // Performance analytics
 }
 ```
 
@@ -108,7 +117,7 @@ cmake ..
 make -j$(nproc)
 
 # Run tests
-make test
+make run_tests
 
 # Run optimizer
 ./bin/portfolio_optimizer --config ../data/config/portfolio_config.json
@@ -123,7 +132,7 @@ docker run -it portfolio-optimizer
 
 ## Usage
 
-### Backtesting Example
+### End-to-End Backtest with Analytics
 
 ```cpp
 #include "backtest/backtest_engine.hpp"
@@ -158,14 +167,78 @@ params.rebalance.min_days_between = 5;
 BacktestEngine engine(params);
 auto result = engine.run(data);
 
-// Analyze results
+// Full analytics summary (uses analytics layer automatically)
 result.print_summary();
-std::cout << "Total return: " << result.total_return() << "\n";
-std::cout << "Sharpe ratio: " << result.sharpe_ratio() << "\n";
-std::cout << "Max drawdown: " << result.max_drawdown() << "\n";
 
-// Export results
+// Access the complete analytics suite
+auto metrics = result.compute_analytics();
+std::cout << "Sharpe Ratio:  " << metrics.sharpe_ratio() << "\n";
+std::cout << "Sortino Ratio: " << metrics.sortino_ratio() << "\n";
+std::cout << "Calmar Ratio:  " << metrics.calmar_ratio() << "\n";
+std::cout << "Max Drawdown:  " << metrics.max_drawdown() << "\n";
+std::cout << "VaR (95%):     " << metrics.value_at_risk(0.95) << "\n";
+std::cout << "CVaR (95%):    " << metrics.conditional_var(0.95) << "\n";
+std::cout << "Skewness:      " << metrics.skewness() << "\n";
+std::cout << "Kurtosis:      " << metrics.kurtosis() << "\n";
+
+// Export analytics
 result.export_nav_to_csv("results/nav_series.csv");
+result.export_analytics_csv("results/analytics_timeseries.csv");
+std::string json = result.export_analytics_json();
+```
+
+### Standalone Performance Analytics
+
+```cpp
+#include "analytics/performance_metrics.hpp"
+#include "analytics/drawdown_analysis.hpp"
+#include "analytics/benchmark_analysis.hpp"
+#include "analytics/rolling_statistics.hpp"
+#include "analytics/attribution.hpp"
+
+using namespace portfolio::analytics;
+
+// From raw vectors (no backtest needed)
+std::vector<double> nav = { /* daily NAV values */ };
+std::vector<double> returns = { /* daily returns */ };
+std::vector<std::string> dates = { /* YYYY-MM-DD dates */ };
+
+PerformanceMetrics metrics(nav, returns, dates, 0.02, 252);
+std::cout << metrics.summary();
+
+// Drawdown event analysis
+DrawdownAnalysis dd(nav, dates);
+auto worst = dd.worst_drawdown();
+auto top5 = dd.top_drawdowns(5);
+std::cout << dd.report();
+
+// Benchmark-relative analysis
+std::vector<double> benchmark_returns = { /* benchmark daily returns */ };
+BenchmarkAnalysis bench(returns, benchmark_returns, 0.02, 252);
+std::cout << "Alpha: " << bench.alpha() << "\n";
+std::cout << "Beta:  " << bench.beta() << "\n";
+std::cout << "R^2:   " << bench.r_squared() << "\n";
+std::cout << "IR:    " << bench.information_ratio() << "\n";
+
+// Rolling statistics
+RollingStatistics rolling(returns, 63);  // 63-day (quarterly) window
+auto vol = rolling.volatility();
+auto sharpe = rolling.sharpe_ratio();
+auto beta = rolling.beta(benchmark_returns);
+
+// Performance attribution (Brinson-Fachler)
+std::vector<SectorAllocation> port_sectors = {
+    {"Technology", 0.40, 0.06},
+    {"Healthcare", 0.35, 0.03},
+    {"Finance",    0.25, -0.01}
+};
+std::vector<SectorAllocation> bench_sectors = {
+    {"Technology", 0.30, 0.05},
+    {"Healthcare", 0.40, 0.02},
+    {"Finance",    0.30, 0.01}
+};
+auto attrib = Attribution::single_period(port_sectors, bench_sectors);
+// attrib.total_allocation, attrib.total_selection, attrib.total_interaction
 ```
 
 ### Portfolio Management Example
@@ -187,142 +260,6 @@ portfolio.update_prices("2025-01-15", prices);
 Eigen::VectorXd target(3);
 target << 0.4, 0.3, 0.3;
 auto shares_traded = portfolio.set_target_weights(target, prices);
-
-// Inspect state
-std::cout << "NAV: " << portfolio.nav() << "\n";
-std::cout << "Cash: " << portfolio.cash() << "\n";
-auto weights = portfolio.current_weights();
-```
-
-### Transaction Cost Modeling Example
-
-```cpp
-#include "backtest/transaction_cost_model.hpp"
-
-using namespace portfolio::backtest;
-
-TransactionCostConfig cfg;
-cfg.commission_rate = 0.001;       // 10 bps
-cfg.slippage_bps = 5.0;           // 5 bps
-cfg.market_impact_model = "sqrt";  // Sub-linear impact
-cfg.market_impact_coeff = 1e-4;
-
-TransactionCostModel model(cfg);
-
-TradeOrder order{"AAPL", 1000.0, 150.0};
-TradeCost cost = model.calculate_cost(order);
-// cost.commission, cost.slippage, cost.market_impact, cost.total()
-```
-
-### Rebalance Scheduling Example
-
-```cpp
-#include "backtest/rebalance_scheduler.hpp"
-
-using namespace portfolio::backtest;
-
-RebalanceConfig cfg;
-cfg.frequency = RebalanceFrequency::MONTHLY;
-cfg.drift_threshold = 0.05;    // 5% drift triggers rebalance
-cfg.min_days_between = 5;      // At least 5 days between rebalances
-
-RebalanceScheduler scheduler(cfg);
-
-Eigen::VectorXd current(3), target(3);
-current << 0.55, 0.25, 0.20;
-target << 0.40, 0.30, 0.30;
-
-if (scheduler.should_rebalance("2025-02-03", current, target)) {
-    // Execute rebalance
-    scheduler.record_rebalance("2025-02-03");
-}
-```
-
-### Optimization Example
-
-```cpp
-#include "optimizer/mean_variance_optimizer.hpp"
-#include "risk/risk_model_factory.hpp"
-
-using namespace portfolio;
-
-// Estimate risk
-risk::RiskModelConfig risk_cfg;
-risk_cfg.type = "ledoit_wolf";
-auto model = risk::RiskModelFactory::create(risk_cfg);
-auto cov = model->estimate_covariance(returns);
-
-// Optimize
-optimizer::MeanVarianceOptimizer opt(optimizer::ObjectiveType::MAX_SHARPE, 0.02);
-optimizer::OptimizationConstraints constraints;
-constraints.min_weight = 0.0;
-constraints.max_weight = 0.3;
-
-auto result = opt.optimize(expected_returns, cov, constraints);
-```
-
-### Turnover-Constrained Optimization Example
-
-```cpp
-optimizer::OptimizationConstraints constraints;
-constraints.min_weight = 0.0;
-constraints.max_weight = 0.30;
-constraints.max_turnover = 0.10; // 10% per-asset limit
-
-auto result = optimizer.optimize(
-    expected_returns,
-    covariance,
-    constraints,
-    current_weights
-);
-```
-
-## Configuration
-
-Portfolio configuration is specified in JSON format:
-
-```json
-{
-  "data": {
-    "source": "csv",
-    "filepath": "data/prices/market_data.csv",
-    "tickers": ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA"],
-    "start_date": "2020-01-01",
-    "end_date": "2024-12-31"
-  },
-  "risk_model": {
-    "type": "ledoit_wolf",
-    "shrinkage_target": "constant_correlation",
-    "bias_correction": true
-  },
-  "optimizer": {
-    "type": "mean_variance",
-    "objective": "max_sharpe",
-    "constraints": {
-      "min_weight": 0.0,
-      "max_weight": 0.3,
-      "long_only": true,
-      "sum_to_one": true,
-      "max_turnover": 0.15
-    },
-    "risk_free_rate": 0.02
-  },
-  "backtest": {
-    "initial_capital": 1000000.0,
-    "rebalance_frequency": "monthly",
-    "lookback_window": 252,
-    "min_history": 60,
-    "transaction_costs": {
-      "commission_rate": 0.001,
-      "slippage_bps": 5.0,
-      "market_impact": "linear"
-    },
-    "cash_management": {
-      "allow_cash": true,
-      "cash_return": 0.0
-    }
-  }
-}
 ```
 
 ## Testing
@@ -330,25 +267,30 @@ Portfolio configuration is specified in JSON format:
 ```bash
 # Build and run all tests
 cd build
-cmake ..
+cmake .. -DCMAKE_BUILD_TYPE=Debug
 make -j$(nproc)
-make test
+make run_tests
 
-# Run specific test suites
-./bin/test_data_loader
-./bin/test_risk_models
-./bin/test_mean_variance_optimizer
-./bin/test_efficient_frontier
-./bin/test_turnover_constraints
-./bin/test_tracking_error
+# Run individual test suites
+./bin/test_test_data_loader
+./bin/test_test_risk_models
+./bin/test_test_mean_variance_optimizer
+./bin/test_test_efficient_frontier
+./bin/test_test_turnover_constraints
+./bin/test_test_tracking_error
 ./bin/test_test_portfolio
 ./bin/test_test_transaction_costs
 ./bin/test_test_rebalance_scheduler
 ./bin/test_test_trade_logger
 ./bin/test_test_backtest_engine
+./bin/test_test_performance_metrics
+./bin/test_test_drawdown_analysis
+./bin/test_test_benchmark_analysis
+./bin/test_test_rolling_statistics
+./bin/test_test_attribution
 
 # Run with verbose output
-./bin/test_test_backtest_engine -s
+./bin/test_test_performance_metrics -s
 ```
 
 ## Performance Benchmarks
@@ -366,20 +308,12 @@ make test
 | Risk Model Estimation | 100x100 matrix | <5ms |
 | Portfolio Optimization | 50 assets | <50ms |
 | Backtest (2 years, monthly) | 10 assets | <100ms |
+| All analytics metrics | 252-day series | <2ms |
+| Rolling Sharpe (252-day window) | 1000 days | <5ms |
+| Drawdown analysis | 2500 days | <2ms |
+| Full analytics report | 252-day series | <10ms |
 
 ## Roadmap
-
-### Feature Set 4: Performance Analytics (Planned)
-
-**Metrics**:
-- Return metrics: Total return, CAGR, annualized returns
-- Risk metrics: Volatility, max drawdown, VaR, CVaR, downside deviation
-- Risk-adjusted: Sharpe, Sortino, Calmar, Information ratios
-- Relative: Alpha, beta, tracking error, R-squared
-- Attribution: Brinson-Fachler decomposition
-
-**Status**: Planned
-**Estimated Effort**: 3-4 weeks
 
 ### Feature Set 5: Visualization and Reporting (Planned)
 
@@ -390,6 +324,8 @@ make test
 - Weight evolution charts
 - Risk decomposition plots
 - Efficient frontier plots
+- Drawdown and underwater charts
+- Rolling metrics visualization
 
 **Status**: Planned
 **Estimated Effort**: 3-4 weeks
@@ -418,18 +354,18 @@ make test
 ## Code Statistics
 
 ```
-Production Code:     ~10,500 lines C++17
-Test Code:           ~3,800 lines
+Production Code:     ~13,900 lines C++17
+Test Code:           ~5,750 lines
 Build Config:        ~350 lines (CMake, Docker)
-Documentation:       ~8,000 lines (README, guides, release notes, changelogs)
-Total:               ~22,650 lines
+Documentation:       ~9,500 lines (README, guides, release notes, changelogs)
+Total:               ~29,500 lines
 
 Test Coverage:
-  Unit tests:        55 tests
-  Integration tests: 22 tests
+  Unit tests:        85 tests
+  Integration tests: 52 tests
   Convergence tests: 5 tests
-  Edge case tests:   5 tests
-  Total:             87 tests (100% passing)
+  Edge case tests:   15 tests
+  Total:             157 tests (100% passing)
 ```
 
 ## Dependencies
@@ -462,6 +398,7 @@ Contributions are welcome. Please:
 
 ## Version History
 
+- **1.6.0** (2026-02-17) - Performance Analytics (Feature Set 4)
 - **1.5.0** (2026-02-16) - Backtesting Engine (Feature Set 3)
 - **1.4.0** (2026-02-12) - Advanced Constraints and Optimization (Feature Set 2.3)
 - **1.3.0** (2026-02-04) - Advanced Portfolio Optimization (Feature Set 2.2)
@@ -478,7 +415,7 @@ MIT License. See LICENSE for details.
 1. Markowitz, H. (1952). "Portfolio Selection", The Journal of Finance
 2. J.P. Morgan (1996). "RiskMetrics Technical Document"
 3. Ledoit, O. & Wolf, M. (2004). "Honey, I Shrunk the Sample Covariance Matrix"
-4. Stellato, B. et al. (2020). "OSQP: An Operator Splitting Solver for Quadratic Programs"
-5. Boyd, S. & Vandenberghe, L. (2004). Convex Optimization, Cambridge University Press
-6. Farhi, E. et al. (2014). "A Quantum Approximate Optimization Algorithm"
-7. Lucas, A. (2014). "Ising formulations of many NP problems", Frontiers in Physics
+4. Brinson, G., Hood, L. & Beebower, G. (1986). "Determinants of Portfolio Performance", Financial Analysts Journal
+5. Carino, D. (1999). "Combining Attribution Effects Over Time", Journal of Performance Measurement
+6. Beasley, J., Springer, S. & Moro, B. (1996). "Algorithm for the Percentage Points of the Normal Distribution"
+7. Stellato, B. et al. (2020). "OSQP: An Operator Splitting Solver for Quadratic Programs"
