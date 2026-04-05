@@ -13,21 +13,30 @@ RUN apt-get update && apt-get install -y \
     wget \
     libeigen3-dev \
     nlohmann-json3-dev \
+    libblas-dev \
+    liblapack-dev \
     python3 \
     python3-pip \
     python3-dev \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages for visualization
-RUN pip3 install --no-cache-dir \
-    numpy==1.24.3 \
-    pandas==2.0.3 \
-    matplotlib==3.7.2 \
-    seaborn==0.12.2 \
-    plotly==5.15.0 \
-    kaleido==0.2.1 \
-    tabulate==0.9.0 \
-    jinja2==3.1.2
+# Create an isolated virtual environment to install Python packages
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/python -m pip install --upgrade pip setuptools wheel && \
+    /opt/venv/bin/pip install --no-cache-dir \
+        numpy \
+        pandas \
+        matplotlib \
+        seaborn \
+        plotly \
+        kaleido \
+        tabulate \
+        jinja2
+
+# Ensure the virtualenv is used by default in the container
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Set working directory
 WORKDIR /app
@@ -36,7 +45,17 @@ WORKDIR /app
 COPY . /app
 
 # Create build directory and compile the project
-RUN mkdir -p build && cd build && \
+# Remove any existing build directory (copied from host) to avoid stale CMake cache
+# Build and install OSQP from source (libosqp-dev may not be available on all base images)
+RUN git clone --depth 1 https://github.com/osqp/osqp.git /tmp/osqp && \
+    cd /tmp/osqp && mkdir -p build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    cmake --build . -j$(nproc) && \
+    cmake --install . && \
+    rm -rf /tmp/osqp
+
+# Build the project
+RUN rm -rf build && mkdir build && cd build && \
     cmake -DCMAKE_BUILD_TYPE=Release .. && \
     make -j$(nproc)
 
