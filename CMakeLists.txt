@@ -139,6 +139,25 @@ if(ANALYTICS_SOURCES)
     endif()
 endif()
 
+# === Quantum layer (Feature Set 6) ===
+# Insert after the analytics library block.
+
+file(GLOB_RECURSE QUANTUM_SOURCES "src/quantum/*.cpp")
+if(QUANTUM_SOURCES)
+    add_library(quantum ${QUANTUM_SOURCES})
+    target_include_directories(quantum PUBLIC ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(quantum PUBLIC data risk optimizer Eigen3::Eigen)
+    if(nlohmann_json_FOUND)
+        target_link_libraries(quantum PUBLIC nlohmann_json::nlohmann_json)
+    endif()
+endif()
+
+# Add "quantum" to the existing target_link_libraries for portfolio_optimizer
+# only if the target exists — use: if(TARGET quantum)
+
+# Note: tests in tests/ are discovered and built below. Do not add
+# explicit test executables here to avoid duplicate test names.
+
 # ===================
 # Main Executable
 # ===================
@@ -196,6 +215,9 @@ if(TARGET backtest)
 endif()
 if(TARGET analytics)
     list(APPEND TEST_LIBS analytics)
+endif()
+if(TARGET quantum)
+    list(APPEND TEST_LIBS quantum)
 endif()
 
 foreach(test_src ${TEST_SOURCES})
