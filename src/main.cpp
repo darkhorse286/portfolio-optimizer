@@ -16,6 +16,7 @@
 #include <exception>
 #include <iomanip>
 #include <chrono>
+#include <cstdlib>
 
 using namespace portfolio;
 
@@ -62,6 +63,7 @@ struct CommandLineArgs
     bool compute_frontier = false;
     bool verbose = false;
     bool show_help = false;
+    bool generate_report = false;
 
     static CommandLineArgs parse(int argc, char *argv[])
     {
@@ -90,6 +92,10 @@ struct CommandLineArgs
             else if (arg == "--verbose")
             {
                 args.verbose = true;
+            }
+            else if (arg == "--report")
+            {
+                args.generate_report = true;
             }
             else
             {
@@ -159,6 +165,47 @@ void print_optimization_result(
     }
 
     std::cout << std::string(60, '-') << "\n";
+}
+
+/**
+ * @brief Check if `python3` is available on the system PATH.
+ *
+ * @return True if python3 is found, false otherwise.
+ */
+static bool python3_available()
+{
+    return std::system("command -v python3 >/dev/null 2>&1") == 0;
+}
+
+/**
+ * @brief Run the Python report generator script using `std::system`.
+ *
+ * This function checks for `python3` first; if not available it prints a
+ * warning to `std::cerr` and returns without crashing the program.
+ *
+ * @param output_dir Directory to pass as both input and output to the script.
+ */
+static void run_report_generator(const std::string &output_dir)
+{
+    if (!python3_available())
+    {
+        std::cerr << "Warning: 'python3' not found in PATH; skipping report generation.\n";
+        return;
+    }
+
+    std::cout << "Starting report generation (this may take a moment)...\n";
+
+    std::string cmd = "python3 scripts/generate_report.py --input-dir " + output_dir + " --output-dir " + output_dir;
+    int rc = std::system(cmd.c_str());
+
+    if (rc == 0)
+    {
+        std::cout << "Report generation completed successfully." << std::endl;
+    }
+    else
+    {
+        std::cerr << "Warning: report generation command exited with code " << rc << "." << std::endl;
+    }
 }
 
 /**
@@ -385,6 +432,12 @@ int run(const CommandLineArgs &args)
                   << duration << " ms\n";
         std::cout << "================================================================\n"
                   << std::endl;
+
+        // Optionally generate the HTML report if requested
+        if (args.generate_report)
+        {
+            run_report_generator(args.output_dir);
+        }
 
         return 0;
     }
