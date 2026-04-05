@@ -315,20 +315,19 @@ make run_tests
 
 ## Roadmap
 
-### Feature Set 5: Visualization and Reporting (Planned)
+### Feature Set 5: Visualization and Reporting (Initial Delivery)
 
-**Tools**:
-- Python integration for plotting (matplotlib/plotly)
-- HTML report generation
-- Equity curve visualization
-- Weight evolution charts
-- Risk decomposition plots
-- Efficient frontier plots
-- Drawdown and underwater charts
-- Rolling metrics visualization
+**Tools & Deliverables**:
+- Python integration for plotting (matplotlib)
+- Self-contained HTML report generation (`scripts/generate_report.py`)
+- Equity curve and drawdown charts (PNG output)
+- Embedded metrics table and base64-embedded charts in HTML
+- `--report` flag in the C++ binary to optionally invoke the report generator
+- Dockerfile improvements: virtualenv for Python deps, `.dockerignore` to avoid build cache issues
+- Test coverage: Python unit + integration tests, C++ smoke test, unified `run_all_tests.sh`
 
-**Status**: Planned
-**Estimated Effort**: 3-4 weeks
+**Status**: Initial delivery — core reporting pipeline and tests completed. Stubs are in place for richer plotting and additional charts.
+**Notes**: Future work includes richer plot types (weight evolution, efficient frontier visualization), Plotly interactive exports, and template refinements.
 
 ### Feature Set 6: Quantum Optimization (Planned)
 
