@@ -64,6 +64,8 @@ struct CommandLineArgs
     bool verbose = false;
     bool show_help = false;
     bool generate_report = false;
+    bool quantum_submit = false;
+    bool quantum_collect = false;
 
     static CommandLineArgs parse(int argc, char *argv[])
     {
@@ -96,6 +98,14 @@ struct CommandLineArgs
             else if (arg == "--report")
             {
                 args.generate_report = true;
+            }
+            else if (arg == "--quantum-submit")
+            {
+                args.quantum_submit = true;
+            }
+            else if (arg == "--quantum-collect")
+            {
+                args.quantum_collect = true;
             }
             else
             {
@@ -209,6 +219,69 @@ static void run_report_generator(const std::string &output_dir)
 }
 
 /**
+ * @brief Run the Qiskit submit script via subprocess.
+ *
+ * @param output_dir Directory for problem and jobs JSON files.
+ */
+static void run_quantum_submit(const std::string &output_dir)
+{
+    if (!python3_available())
+    {
+        std::cerr << "Warning: 'python3' not found in PATH; skipping quantum submit." << std::endl;
+        return;
+    }
+
+    std::filesystem::create_directories(output_dir);
+    std::string problem_file = output_dir + "/quantum_problem.json";
+    std::string jobs_file = output_dir + "/quantum_jobs.json";
+
+    std::cout << "Starting quantum submit...\n";
+    std::string cmd = "python3 scripts/quantum/qiskit_submit.py"
+                      " --problem-file " + std::string("\"") + problem_file + "\""
+                      " --jobs-file " + std::string("\"") + jobs_file + "\"";
+    int rc = std::system(cmd.c_str());
+    if (rc == 0)
+    {
+        std::cout << "Quantum submit completed successfully." << std::endl;
+    }
+    else
+    {
+        std::cerr << "Warning: quantum submit command exited with code " << rc << "." << std::endl;
+    }
+}
+
+/**
+ * @brief Run the Qiskit collect script via subprocess.
+ *
+ * @param output_dir Directory for jobs and result JSON files.
+ */
+static void run_quantum_collect(const std::string &output_dir)
+{
+    if (!python3_available())
+    {
+        std::cerr << "Warning: 'python3' not found in PATH; skipping quantum collect." << std::endl;
+        return;
+    }
+
+    std::filesystem::create_directories(output_dir);
+    std::string jobs_file = output_dir + "/quantum_jobs.json";
+
+    std::cout << "Starting quantum collect...\n";
+    std::string cmd = "python3 scripts/quantum/qiskit_collect.py"
+                      " --jobs-file " + std::string("\"") + jobs_file + "\""
+                      " --results-dir " + std::string("\"") + output_dir + "\"";
+    int rc = std::system(cmd.c_str());
+    if (rc == 0)
+    {
+        std::cout << "Quantum collect completed successfully." << std::endl;
+    }
+    else
+    {
+        std::cerr << "Warning: quantum collect command exited with code " << rc << "." << std::endl;
+    }
+}
+
+/**
  * @brief Main execution function
  */
 int run(const CommandLineArgs &args)
@@ -217,6 +290,19 @@ int run(const CommandLineArgs &args)
 
     try
     {
+        if (args.quantum_submit || args.quantum_collect)
+        {
+            if (args.quantum_submit)
+            {
+                run_quantum_submit(args.output_dir);
+            }
+            if (args.quantum_collect)
+            {
+                run_quantum_collect(args.output_dir);
+            }
+            return 0;
+        }
+
         // ====================================================================
         // 1. Load Configuration
         // ====================================================================
@@ -437,6 +523,16 @@ int run(const CommandLineArgs &args)
         if (args.generate_report)
         {
             run_report_generator(args.output_dir);
+        }
+
+        if (args.quantum_submit)
+        {
+            run_quantum_submit(args.output_dir);
+        }
+
+        if (args.quantum_collect)
+        {
+            run_quantum_collect(args.output_dir);
         }
 
         return 0;

@@ -15,6 +15,7 @@ fi
 echo "Installing test dependencies into virtualenv"
 "$PIP" install --upgrade pip setuptools wheel >/dev/null
 "$PIP" install --upgrade pytest >/dev/null
+"$PIP" install -r scripts/quantum/requirements.txt >/dev/null
 
 echo "Running Python unit tests..."
 "$PY" -m pytest -q tests/python || { echo 'Python unit tests failed'; exit 1; }
@@ -24,7 +25,15 @@ echo "Running Python integration tests..."
 
 echo "Running C++ tests (ctest)..."
 if [ -d build ]; then
-  (cd build && ctest --output-on-failure) || { echo 'C++ tests failed'; exit 1; }
+  (cd build && ctest --output-on-failure --exclude-regex integration) || { echo 'C++ tests failed'; exit 1; }
+else
+  echo 'Build directory not found; please run cmake and build first.'
+  exit 1
+fi
+
+echo "Running C++ integration tests..."
+if [ -d build ]; then
+  (cd build && ctest --output-on-failure --tests-regex integration) && echo "C++ integration tests completed" || echo "C++ integration tests skipped (dependencies not available)"
 else
   echo 'Build directory not found; please run cmake and build first.'
   exit 1

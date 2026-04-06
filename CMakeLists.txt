@@ -175,6 +175,10 @@ target_link_libraries(portfolio_optimizer PRIVATE
     Eigen3::Eigen
 )
 
+if(TARGET quantum)
+    target_link_libraries(portfolio_optimizer PRIVATE quantum)
+endif()
+
 if(nlohmann_json_FOUND)
     target_link_libraries(portfolio_optimizer PRIVATE nlohmann_json::nlohmann_json)
 endif()
@@ -229,6 +233,11 @@ foreach(test_src ${TEST_SOURCES})
     add_test(NAME ${test_name} COMMAND ${target_name})
     list(APPEND ALL_TEST_TARGETS ${target_name})
 endforeach()
+
+# Ensure Qiskit integration test runs from the repo root so Python scripts are located correctly.
+if(TARGET test_qiskit_solver_integration)
+    set_tests_properties(test_qiskit_solver_integration PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
 
 # Aggregate run_tests target
 add_custom_target(run_tests
