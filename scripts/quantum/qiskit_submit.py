@@ -45,7 +45,36 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="QAOA circuit depth p.",
     )
+    parser.add_argument(
+        "--list-backends",
+        action="store_true",
+        help="Authenticate with IBM, print available backends with qubit counts and queue depths, then exit 0.",
+    )
     return parser.parse_args()
+
+
+def validate_ibm_credentials() -> bool:
+    """Validate IBM Quantum credentials and return True on success, False with warning on failure."""
+    token = os.environ.get("IBM_QUANTUM_TOKEN")
+    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "ibm-q/open/main")
+    if not token:
+        print("FAIL: IBM_QUANTUM_TOKEN environment variable is not set.", file=sys.stderr)
+        return False
+
+    try:
+        from qiskit_ibm_runtime import QiskitRuntimeService
+        service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+        # Try to list backends to verify
+        backends = service.backends()
+        if backends:
+            print("PASS: IBM Quantum credentials are valid.")
+            return True
+        else:
+            print("FAIL: No backends available.", file=sys.stderr)
+            return False
+    except Exception as exc:
+        print(f"FAIL: IBM Quantum authentication failed: {exc}", file=sys.stderr)
+        return False
 
 
 def load_problem(problem_file: Path) -> Dict[str, Any]:
@@ -134,6 +163,25 @@ def append_job_entry(jobs_file: Path, job_entry: Dict[str, Any]) -> None:
 
 def main() -> int:
     args = parse_args()
+
+    if args.list_backends:
+        if not validate_ibm_credentials():
+            sys.exit(1)
+        from qiskit_ibm_runtime import QiskitRuntimeService
+        token = os.environ.get("IBM_QUANTUM_TOKEN")
+        instance = os.environ.get("IBM_QUANTUM_INSTANCE", "ibm-q/open/main")
+        service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+        backends = service.backends()
+        print("Available IBM Quantum backends:")
+        for backend in backends:
+            name = backend.name
+            num_qubits = backend.num_qubits
+            status = backend.status()
+            operational = status.operational
+            pending_jobs = getattr(status, 'pending_jobs', 'N/A')
+            print(f"  {name}: {num_qubits} qubits, operational={operational}, pending_jobs={pending_jobs}")
+        sys.exit(0)
+
     problem_file = Path(args.problem_file)
     jobs_file = Path(args.jobs_file)
     problem = load_problem(problem_file)
@@ -146,12 +194,15 @@ def main() -> int:
 
     circuit = build_qaoa_circuit(num_variables, q_matrix, qaoa_depth, 0.1, 0.1)
 
+    circuit_depth = 0
+
     if backend_name == "aer_simulator":
         try:
             from qiskit_aer import AerSimulator
 
             backend_instance = AerSimulator()
             transpiled = transpile(circuit, backend_instance)
+            circuit_depth = int(transpiled.depth())
             job = backend_instance.run(transpiled, shots=shots)
             result = job.result()
             metadata = getattr(result, "metadata", {}) or {}
@@ -173,13 +224,14 @@ def main() -> int:
             from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2
 
             service = (
-                QiskitRuntimeService(token=token, instance=instance)
+                QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
                 if instance
-                else QiskitRuntimeService(token=token)
+                else QiskitRuntimeService(channel="ibm_quantum", token=token)
             )
-            backend_instance = service.backend(backend_name)
-            transpiled = transpile(circuit, backend_instance)
-            sampler = SamplerV2(backend_instance)
+            backend = service.backend(backend_name)
+            transpiled = transpile(circuit, backend=backend, optimization_level=1)
+            circuit_depth = int(transpiled.depth())
+            sampler = SamplerV2(mode=backend)
             job = sampler.run([transpiled], shots=shots)
             job_id = job.job_id()
         except Exception as exc:
@@ -203,6 +255,7 @@ def main() -> int:
             "beta": 0.1,
             "qaoa_depth": qaoa_depth,
         },
+        "circuit_depth": circuit_depth,
     }
 
     append_job_entry(jobs_file, job_entry)

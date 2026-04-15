@@ -53,6 +53,17 @@
     }
   },
   
+  "ibm_quantum": {
+    "enabled": false,
+    "backend": "ibm_brisbane",
+    "shots": 1024,
+    "qaoa_depth": 1,
+    "timeout_minutes": 30,
+    "poll_interval_seconds": 30,
+    "error_mitigation": false,
+    "instance": "ibm-q/open/main"
+  },
+  
   "risk_model": {
     "type": "ewma",
     "estimation_window": 252,

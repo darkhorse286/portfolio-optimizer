@@ -2,6 +2,7 @@
 
 #include "backtest/backtest_engine.hpp"
 #include "backtest/transaction_cost_model.hpp"
+#include "analytics/performance_metrics.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -101,6 +102,21 @@ namespace portfolio
                 if (!res.success)
                     throw std::runtime_error(res.message);
                 return res.weights;
+            }
+            catch (const std::exception &e)
+            {
+                throw;
+            }
+        }
+
+        Eigen::VectorXd BacktestEngine::optimize_quantum(const Eigen::VectorXd &expected_returns,
+                                                         const Eigen::MatrixXd &covariance,
+                                                         const Eigen::VectorXd &current_weights,
+                                                         quantum::QuantumOptimizer &optimizer) const
+        {
+            try
+            {
+                return optimizer.optimize(covariance, expected_returns, params_.constraints);
             }
             catch (const std::exception &e)
             {
@@ -227,8 +243,8 @@ namespace portfolio
 
                 portfolio.update_prices(date, prices);
 
-                // Rebalance logic (currently disabled for debugging)
-                if (false && date_idx >= params_.min_history)
+                // Rebalance logic
+                if (date_idx >= params_.min_history)
                 {
                     // Extract window and estimate
                     Eigen::MatrixXd window = extract_window(market_data, date_idx);
@@ -316,6 +332,125 @@ namespace portfolio
             result.trades = logger.trades();
             result.message = "completed";
             return result;
+        }
+
+        BacktestResult BacktestEngine::run(const MarketData &market_data, quantum::QuantumOptimizer &optimizer)
+        {
+            BacktestResult result;
+
+            size_t N = market_data.num_dates();
+            if (static_cast<int>(N) < params_.min_history)
+            {
+                throw std::invalid_argument("market_data has fewer dates than min_history");
+            }
+
+            std::vector<std::string> dates = market_data.get_dates();
+            std::vector<std::string> tickers = market_data.get_tickers();
+
+            const Eigen::MatrixXd &prices_matrix = market_data.get_Prices();
+
+            Portfolio portfolio(params_.initial_capital, tickers);
+            TransactionCostModel cost_model(params_.transaction_costs);
+            RebalanceScheduler scheduler(params_.rebalance);
+            TradeLogger logger;
+
+            // Precompute returns matrix once
+            Eigen::MatrixXd all_returns = market_data.calculate_returns();
+
+            for (int date_idx = 0; date_idx < static_cast<int>(N); ++date_idx)
+            {
+                const std::string &date = dates[static_cast<size_t>(date_idx)];
+                Eigen::VectorXd prices = prices_matrix.row(date_idx).transpose();
+
+                portfolio.update_prices(date, prices);
+
+                // Rebalance logic
+                if (date_idx >= params_.min_history)
+                {
+                    // Extract window and estimate
+                    Eigen::MatrixXd window = extract_window(market_data, date_idx);
+                    if (window.rows() > 0)
+                    {
+                        if (window.rows() < 2)
+                        {
+                            // not enough observations for covariance estimation
+                            if (params_.verbose)
+                                std::cerr << "Skipping optimization on " << date << " - insufficient return observations\n";
+                        }
+                        else
+                        {
+                            Eigen::VectorXd expected = estimate_returns(window);
+                            Eigen::MatrixXd cov = estimate_risk(window);
+
+                            Eigen::VectorXd pre_weights = portfolio.current_weights();
+                            Eigen::VectorXd target_weights;
+                            try
+                            {
+                                target_weights = optimize_quantum(expected, cov, pre_weights, optimizer);
+                                bool do_rebalance = scheduler.should_rebalance(date, pre_weights, target_weights);
+                                if (do_rebalance)
+                                {
+                                    // Execute trades
+                                    Eigen::VectorXd shares_traded = portfolio.set_target_weights(target_weights, prices);
+
+                                    // Build costs vector
+                                    std::vector<TradeCost> costs;
+                                    costs.reserve(static_cast<size_t>(shares_traded.size()));
+                                    for (int i = 0; i < shares_traded.size(); ++i)
+                                    {
+                                        TradeOrder o{tickers[static_cast<size_t>(i)], shares_traded[i], prices[i]};
+                                        costs.push_back(cost_model.calculate_cost(o));
+                                    }
+
+                                    double total_cost = cost_model.calculate_total_cost(shares_traded, prices, tickers);
+                                    if (total_cost > 0.0)
+                                    {
+                                        try
+                                        {
+                                            portfolio.deduct_costs(total_cost);
+                                        }
+                                        catch (...)
+                                        {
+                                        }
+                                    }
+
+                                    Eigen::VectorXd post_weights = portfolio.current_weights();
+                                    logger.log_rebalance(date, tickers, shares_traded, prices, costs, pre_weights, post_weights);
+                                    scheduler.record_rebalance(date);
+                                }
+                            }
+                            catch (const std::exception &e)
+                            {
+                                std::cerr << "Optimization exception on " << date << ": " << e.what() << "\n";
+                            }
+                        }
+                    }
+                }
+
+                // Record snapshot starting from second date to align with returns
+                if (date_idx > 0)
+                {
+                    portfolio.record_snapshot();
+                    const auto &hist = portfolio.history();
+                    const PortfolioSnapshot &s = hist.back();
+                    result.snapshots.push_back(s);
+                    result.nav_series.push_back(s.nav);
+                    result.return_series.push_back(s.daily_return);
+                    result.dates.push_back(s.date);
+                }
+            } // <-- closes for loop
+
+            result.success = true;
+            result.trade_summary = logger.get_summary();
+            result.trades = logger.trades();
+            result.message = "completed";
+            return result;
+        }
+
+        analytics::PerformanceMetrics BacktestResult::compute_analytics(
+            double risk_free_rate, int trading_days_per_year) const
+        {
+            return analytics::PerformanceMetrics(*this, risk_free_rate, trading_days_per_year);
         }
 
     } // namespace backtest

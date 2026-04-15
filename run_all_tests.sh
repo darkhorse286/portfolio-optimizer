@@ -23,6 +23,12 @@ echo "Running Python unit tests..."
 echo "Running Python integration tests..."
 "$PY" -m pytest -q tests/integration -k 'not cpp_smoke' || { echo 'Python integration tests failed'; exit 1; }
 
+if [ "${TEST_IBM:-0}" = "1" ]; then
+  echo "=== IBM Quantum connectivity check ==="
+  "$PY" scripts/quantum/ibm_credentials_check.py
+  record_result "IBM credentials" $?
+fi
+
 echo "Running C++ tests (ctest)..."
 if [ -d build ]; then
   (cd build && ctest --output-on-failure --exclude-regex integration) || { echo 'C++ tests failed'; exit 1; }

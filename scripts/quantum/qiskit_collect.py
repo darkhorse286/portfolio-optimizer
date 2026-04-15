@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
         default=30,
         help="Seconds between status checks.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print job status for each pending job without waiting or writing results.",
+    )
     return parser.parse_args()
 
 
@@ -206,18 +211,19 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
         from qiskit_ibm_runtime import QiskitRuntimeService
 
         service = (
-            QiskitRuntimeService(token=token, instance=instance)
+            QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
             if instance
-            else QiskitRuntimeService(token=token)
+            else QiskitRuntimeService(channel="ibm_quantum", token=token)
         )
         backend = service.backend(job["backend"])
-        runner_job = backend.retrieve_job(job["job_id"])
+        runner_job = service.job(job["job_id"])
     except Exception as exc:
         raise RuntimeError(f"IBM job lookup failed: {exc}")
 
     start_time = time.time()
     deadline = start_time + timeout_min * 60
     status = None
+    wait = poll_interval
     while time.time() < deadline:
         try:
             status_obj = runner_job.status()
@@ -227,9 +233,10 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
 
         if status in ("DONE", "COMPLETED"):
             break
-        if status in ("ERROR", "FAILED"):
+        if status in ("ERROR", "FAILED", "CANCELLED"):
             break
-        time.sleep(poll_interval)
+        time.sleep(wait)
+        wait = min(wait * 1.5, 300)  # cap at 5 minutes
 
     if status is None:
         status = "TIMEOUT"
@@ -343,6 +350,26 @@ def main() -> int:
 
     if not pending:
         print("All jobs already resolved.")
+        return 0
+
+    if args.dry_run:
+        for job in pending:
+            if job["backend"] == "aer_simulator":
+                print(f"Job {job['job_id']}: Aer simulator - COMPLETED")
+            elif job["backend"].startswith("ibm_"):
+                token = os.environ.get("IBM_QUANTUM_TOKEN")
+                instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
+                if not token:
+                    print(f"Job {job['job_id']}: IBM - TOKEN MISSING")
+                    continue
+                try:
+                    from qiskit_ibm_runtime import QiskitRuntimeService
+                    service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+                    runner_job = service.job(job["job_id"])
+                    status = runner_job.status().name
+                    print(f"Job {job['job_id']}: IBM - {status}")
+                except Exception as exc:
+                    print(f"Job {job['job_id']}: IBM - ERROR: {exc}")
         return 0
 
     collected = 0
