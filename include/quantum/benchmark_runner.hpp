@@ -41,6 +41,7 @@ namespace portfolio
             int num_runs;
             int successful_runs;
             std::vector<double> nav_series;
+            std::vector<std::string> date_series;
         };
 
         /**

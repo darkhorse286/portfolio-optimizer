@@ -402,7 +402,7 @@ static void run_benchmark(
     }
 
     std::cout << "Running benchmark...\n";
-    auto result = runner.run(1);
+    auto result = runner.run(3);
 
     result.print_summary();
 

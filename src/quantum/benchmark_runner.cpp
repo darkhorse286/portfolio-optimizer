@@ -144,8 +144,9 @@ namespace portfolio
 
                         result.successful_runs++;
 
-                        // Store nav_series from the last successful run
+                        // Store nav_series and dates from the last successful run
                         result.nav_series = bt_result.nav_series;
+                        result.date_series = bt_result.dates;
                     }
                 }
                 catch (const std::exception& e)
@@ -229,8 +230,19 @@ namespace portfolio
                 run["circuit_execution_us"] = res.mean_circuit_execution_us;
                 run["solution_quality_vs_classical"] = res.solution_quality_vs_classical;
 
-                // nav_series from backtest results
-                run["nav_series"] = res.nav_series;
+                // nav_series with dates for the viz
+                nlohmann::json nav_arr = nlohmann::json::array();
+                for (size_t i = 0; i < res.nav_series.size(); ++i)
+                {
+                    nlohmann::json point;
+                    point["nav"] = res.nav_series[i];
+                    if (i < res.date_series.size())
+                        point["date"] = res.date_series[i];
+                    else
+                        point["date"] = static_cast<int>(i);
+                    nav_arr.push_back(point);
+                }
+                run["nav_series"] = nav_arr;
 
                 j["runs"].push_back(run);
             }

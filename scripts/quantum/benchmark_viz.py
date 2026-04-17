@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import pandas as pd
 from jinja2 import Template
 
@@ -74,10 +75,13 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
             plt.plot(x_axis, normalized, label=_display_name(solver_name), color=color_map.get(solver_type, "#6b7280"))
 
     plt.xlabel("Date")
-    plt.ylabel("Normalized NAV")
-    plt.title("Solver Comparison - Equity Curves")
+    plt.ylabel("Portfolio Value (Normalized to 1.0)")
+    plt.title("Solver Comparison — Equity Curves")
     plt.legend()
     plt.grid(True, alpha=0.3)
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=10, integer=True))
+    plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
@@ -108,7 +112,7 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
         ]
         data.append(row)
 
-    columns = ["Solver", "Type", "Backend", "Sharpe", "Return", "vs Markowitz", "Solve ms"]
+    columns = ["Solver", "Type", "Backend", "Sharpe", "Total Return", "vs Markowitz", "Solve Time (ms)"]
 
     table = ax.table(cellText=data, colLabels=columns, loc='center', cellLoc='center')
     table.auto_set_font_size(False)
