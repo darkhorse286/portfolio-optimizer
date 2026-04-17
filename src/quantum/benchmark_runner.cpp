@@ -195,6 +195,18 @@ namespace portfolio
 
         std::string BenchmarkResult::to_json() const
         {
+            auto compute_max_drawdown = [](const std::vector<double>& nav) -> double {
+                if (nav.empty()) return 0.0;
+                double peak = nav.front();
+                double max_dd = 0.0;
+                for (double v : nav) {
+                    if (v > peak) peak = v;
+                    double dd = (peak > 0.0) ? (peak - v) / peak : 0.0;
+                    if (dd > max_dd) max_dd = dd;
+                }
+                return -max_dd; // negative convention: e.g. -0.225
+            };
+
             nlohmann::json j;
             j["schema_version"] = "1.0";
             j["run_id"] = run_id;
@@ -210,9 +222,9 @@ namespace portfolio
                 run["problem_size"] = res.problem_size;
                 run["performance"]["sharpe_ratio"] = res.mean_sharpe;
                 run["performance"]["total_return"] = res.mean_portfolio_return;
-                run["performance"]["annualized_return"] = res.mean_portfolio_return;  // approximate
+                run["performance"]["annualized_return"] = res.mean_portfolio_return;
                 run["performance"]["annualized_volatility"] = res.mean_portfolio_volatility;
-                run["performance"]["max_drawdown"] = 0.0;  // not computed
+                run["performance"]["max_drawdown"] = compute_max_drawdown(res.nav_series);
                 run["solve_time_ms"] = res.mean_solve_time_ms;
                 run["circuit_execution_us"] = res.mean_circuit_execution_us;
                 run["solution_quality_vs_classical"] = res.solution_quality_vs_classical;

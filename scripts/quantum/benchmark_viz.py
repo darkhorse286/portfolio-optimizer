@@ -12,6 +12,31 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from jinja2 import Template
 
+SOLVER_NAME_MAP: dict[str, str] = {
+    "markowitz": "Markowitz",
+    "sa_classical": "QUBO (Sim. Annealing)",
+    "qaoa": "QAOA",
+}
+
+SOLVER_TYPE_MAP: dict[str, str] = {
+    "classical": "Classical",
+    "quantum_inspired": "QUBO",
+    "quantum": "Quantum (QAOA)",
+}
+
+
+def _display_name(solver_name: str) -> str:
+    """Return a human-readable label for a solver name."""
+    for key, label in SOLVER_NAME_MAP.items():
+        if solver_name.startswith(key):
+            return label
+    return solver_name
+
+
+def _display_type(solver_type: str) -> str:
+    """Return a human-readable label for a solver type."""
+    return SOLVER_TYPE_MAP.get(solver_type, solver_type)
+
 
 def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) -> None:
     """Plot normalized equity curves for all solvers.
@@ -46,7 +71,7 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
         if nav_values:
             first_nav = nav_values[0]
             normalized = [v / first_nav for v in nav_values]
-            plt.plot(x_axis, normalized, label=solver_name, color=color_map.get(solver_type, "#6b7280"))
+            plt.plot(x_axis, normalized, label=_display_name(solver_name), color=color_map.get(solver_type, "#6b7280"))
 
     plt.xlabel("Date")
     plt.ylabel("Normalized NAV")
@@ -73,8 +98,8 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
     data = []
     for res in results:
         row = [
-            res["solver_name"],
-            res["solver_type"],
+            _display_name(res["solver_name"]),
+            _display_type(res["solver_type"]),
             res["execution_backend"],
             f"{res['performance']['sharpe_ratio']:.3f}",
             f"{res['performance']['total_return'] * 100:.1f}%",
@@ -139,13 +164,13 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
     for solver, metrics in metrics_by_solver.items():
         perf = metrics.get("performance", {})
         rows.append([
-            solver,
-            metrics.get("solver_type", ""),
+            _display_name(solver),
+            _display_type(metrics.get("solver_type", "")),
             metrics.get("execution_backend", ""),
             f"{perf.get('sharpe_ratio', 0):.3f}",
             f"{perf.get('total_return', 0) * 100:.1f}%",
             f"{perf.get('annualized_volatility', 0) * 100:.1f}%",
-            f"{perf.get('max_drawdown', 0) * 100:.1f}%"
+            f"{perf.get('max_drawdown', 0) * 100:.1f}%"  # already negative
         ])
 
     template_str = """<!doctype html>
