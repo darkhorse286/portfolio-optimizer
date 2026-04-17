@@ -40,6 +40,7 @@ namespace portfolio
                                         // 1.0 for the classical baseline itself
             int num_runs;
             int successful_runs;
+            std::vector<double> nav_series;
         };
 
         /**

@@ -143,6 +143,9 @@ namespace portfolio
                         }
 
                         result.successful_runs++;
+
+                        // Store nav_series from the last successful run
+                        result.nav_series = bt_result.nav_series;
                     }
                 }
                 catch (const std::exception& e)
@@ -214,9 +217,8 @@ namespace portfolio
                 run["circuit_execution_us"] = res.mean_circuit_execution_us;
                 run["solution_quality_vs_classical"] = res.solution_quality_vs_classical;
 
-                // nav_series: dummy for now, need to collect from backtest
-                run["nav_series"] = nlohmann::json::array();
-                // TODO: populate nav_series from backtest results, limited to 1000
+                // nav_series from backtest results
+                run["nav_series"] = res.nav_series;
 
                 j["runs"].push_back(run);
             }

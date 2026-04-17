@@ -200,11 +200,27 @@ def main() -> int:
         try:
             from qiskit_aer import AerSimulator
 
+            # Preflight: statevector memory grows as 2^n × 16 bytes.
+            # 26 qubits = 1 GB; beyond that simulation will likely OOM.
+            if num_variables > 25:
+                print(
+                    f"Error: Circuit requires {num_variables} qubits. Aer statevector "
+                    f"simulation needs 2^{num_variables} × 16 B ≈ "
+                    f"{(2 ** num_variables * 16) // (1024 ** 2):,} MB of RAM, which "
+                    f"will exceed available memory on most machines. "
+                    f"Reduce num_bits_per_asset (currently implied by problem size).",
+                    file=sys.stderr,
+                )
+                return 1
+
             backend_instance = AerSimulator()
-            transpiled = transpile(circuit, backend_instance)
-            circuit_depth = int(transpiled.depth())
-            job = backend_instance.run(transpiled, shots=shots)
+            circuit_depth = int(circuit.depth())
+            job = backend_instance.run(circuit, shots=shots)
             result = job.result()
+            if not result.success:
+                status = getattr(result, "status", "simulation failed")
+                print(f"Error: Aer submission failed: {status}", file=sys.stderr)
+                return 1
             metadata = getattr(result, "metadata", {}) or {}
             job_id = safe_job_id(metadata, backend_name)
         except Exception as exc:

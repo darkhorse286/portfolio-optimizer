@@ -11,12 +11,17 @@
 #include "risk/risk_model_factory.hpp"
 #include "optimizer/mean_variance_optimizer.hpp"
 #include "optimizer/efficient_frontier.hpp"
+#include "backtest/backtest_engine.hpp"
+#include "quantum/benchmark_runner.hpp"
+#include "quantum/simulated_annealing_solver.hpp"
+#include "quantum/qiskit_solver.hpp"
 #include <iostream>
 #include <string>
 #include <exception>
 #include <iomanip>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 
 using namespace portfolio;
 
@@ -31,6 +36,7 @@ void print_usage(const char *program_name)
               << "  --config PATH         Path to configuration JSON file (required)\n"
               << "  --output PATH         Path to output directory (default: results/)\n"
               << "  --frontier            Compute efficient frontier\n"
+              << "  --benchmark           Run quantum benchmark (MV + SA + Aer QAOA)\n"
               << "  --verbose             Enable verbose logging\n"
               << "  --help, -h            Show this help message\n"
               << "\nExample:\n"
@@ -66,6 +72,7 @@ struct CommandLineArgs
     bool generate_report = false;
     bool quantum_submit = false;
     bool quantum_collect = false;
+    bool benchmark = false;
 
     static CommandLineArgs parse(int argc, char *argv[])
     {
@@ -106,6 +113,10 @@ struct CommandLineArgs
             else if (arg == "--quantum-collect")
             {
                 args.quantum_collect = true;
+            }
+            else if (arg == "--benchmark")
+            {
+                args.benchmark = true;
             }
             else
             {
@@ -178,13 +189,31 @@ void print_optimization_result(
 }
 
 /**
- * @brief Check if `python3` is available on the system PATH.
+ * @brief Return the Python executable to use for subprocesses.
  *
- * @return True if python3 is found, false otherwise.
+ * Prefers the interpreter inside the active virtualenv (VIRTUAL_ENV env var)
+ * so that packages installed via `pip install -r requirements.txt` are found
+ * even though std::system() spawns a bare shell without venv activation.
+ */
+static std::string get_python_executable()
+{
+    const char* venv = std::getenv("VIRTUAL_ENV");
+    if (venv)
+    {
+        std::string venv_python = std::string(venv) + "/bin/python3";
+        if (std::filesystem::exists(venv_python))
+            return venv_python;
+    }
+    return "python3";
+}
+
+/**
+ * @brief Check if the resolved Python interpreter is available.
  */
 static bool python3_available()
 {
-    return std::system("command -v python3 >/dev/null 2>&1") == 0;
+    std::string cmd = get_python_executable() + " --version >/dev/null 2>&1";
+    return std::system(cmd.c_str()) == 0;
 }
 
 /**
@@ -205,7 +234,7 @@ static void run_report_generator(const std::string &output_dir)
 
     std::cout << "Starting report generation (this may take a moment)...\n";
 
-    std::string cmd = "python3 scripts/generate_report.py --input-dir " + output_dir + " --output-dir " + output_dir;
+    std::string cmd = get_python_executable() + " scripts/generate_report.py --input-dir " + output_dir + " --output-dir " + output_dir;
     int rc = std::system(cmd.c_str());
 
     if (rc == 0)
@@ -236,7 +265,7 @@ static void run_quantum_submit(const std::string &output_dir)
     std::string jobs_file = output_dir + "/quantum_jobs.json";
 
     std::cout << "Starting quantum submit...\n";
-    std::string cmd = "python3 scripts/quantum/qiskit_submit.py"
+    std::string cmd = get_python_executable() + " scripts/quantum/qiskit_submit.py"
                       " --problem-file " + std::string("\"") + problem_file + "\""
                       " --jobs-file " + std::string("\"") + jobs_file + "\"";
     int rc = std::system(cmd.c_str());
@@ -267,7 +296,7 @@ static void run_quantum_collect(const std::string &output_dir)
     std::string jobs_file = output_dir + "/quantum_jobs.json";
 
     std::cout << "Starting quantum collect...\n";
-    std::string cmd = "python3 scripts/quantum/qiskit_collect.py"
+    std::string cmd = get_python_executable() + " scripts/quantum/qiskit_collect.py"
                       " --jobs-file " + std::string("\"") + jobs_file + "\""
                       " --results-dir " + std::string("\"") + output_dir + "\"";
     int rc = std::system(cmd.c_str());
@@ -279,6 +308,112 @@ static void run_quantum_collect(const std::string &output_dir)
     {
         std::cerr << "Warning: quantum collect command exited with code " << rc << "." << std::endl;
     }
+}
+
+/**
+ * @brief Invoke benchmark_viz.py to render comparison_results.json into an HTML report.
+ *
+ * @param output_dir Directory containing comparison_results.json and receiving outputs.
+ */
+static void run_benchmark_viz(const std::string &output_dir)
+{
+    if (!python3_available())
+    {
+        std::cerr << "Warning: 'python3' not found in PATH; skipping benchmark visualization.\n";
+        return;
+    }
+
+    std::cout << "Generating benchmark report...\n";
+    std::string comparison_file = output_dir + "/comparison_results.json";
+    std::string cmd = get_python_executable() + " scripts/quantum/benchmark_viz.py"
+                      " --comparison-file \"" + comparison_file + "\""
+                      " --output-dir \"" + output_dir + "\"";
+    int rc = std::system(cmd.c_str());
+    if (rc == 0)
+    {
+        std::cout << "Benchmark report written to: " << output_dir << "/quantum_report.html\n";
+    }
+    else
+    {
+        std::cerr << "Warning: benchmark_viz.py exited with code " << rc << ".\n";
+    }
+}
+
+/**
+ * @brief Run the three-way quantum benchmark (MV + SA + Aer QAOA) and generate the report.
+ *
+ * @param config      Loaded portfolio configuration.
+ * @param data        Market data already loaded and filtered.
+ * @param output_dir  Directory to write comparison_results.json and report outputs.
+ */
+static void run_benchmark(
+    const portfolio::PortfolioConfig &config,
+    const portfolio::MarketData &data,
+    const std::string &output_dir)
+{
+    std::filesystem::create_directories(output_dir);
+
+    // Remove stale jobs file so this run starts with a clean slate.
+    // Without this, every previous failed/successful job accumulates in the file
+    // and collect re-processes them all on each rebalancing period.
+    std::filesystem::remove(output_dir + "/quantum_jobs.json");
+
+    auto backtest_params = portfolio::backtest::BacktestParams::from_config(config);
+
+    portfolio::quantum::BenchmarkRunner runner(data, backtest_params);
+
+    // Classical baseline — max-Sharpe mean-variance
+    auto mv_solver = std::make_shared<portfolio::optimizer::MeanVarianceOptimizer>(
+        portfolio::optimizer::ObjectiveType::MAX_SHARPE,
+        config.optimizer.risk_free_rate);
+    runner.add_classical_solver("markowitz_mv", mv_solver);
+
+    // Quantum-inspired — simulated annealing
+    portfolio::quantum::SimulatedAnnealingConfig sa_config;
+    sa_config.max_iterations    = 10000;
+    sa_config.initial_temperature = 1.0;
+    sa_config.cooling_rate      = 0.99;
+    auto sa_solver = std::make_shared<portfolio::quantum::SimulatedAnnealingSolver>(sa_config);
+    runner.add_quantum_solver("sa_classical", "quantum_inspired", sa_solver);
+
+    // Quantum — QAOA on Aer simulator
+    // Preflight: verify qiskit is importable before registering the solver.
+    // Without this, a missing qiskit produces one error per rebalancing day.
+    bool qiskit_ok = std::system(
+        (get_python_executable() + " -c \"import qiskit\" >/dev/null 2>&1").c_str()) == 0;
+    if (!qiskit_ok)
+    {
+        std::cerr << "Warning: 'qiskit' not found in Python environment ("
+                  << get_python_executable() << "). "
+                  << "Skipping qaoa_p1_aer_simulator solver. "
+                  << "Ensure the venv is activated and requirements are installed.\n";
+    }
+    else
+    {
+        // num_bits_per_asset=2 keeps the circuit at 10×2=20 qubits (16 MB statevector).
+        // The default of 4 bits produces 40 qubits (16 TB), which is not simulable locally.
+        portfolio::quantum::QiskitSolverConfig qiskit_cfg;
+        qiskit_cfg.backend      = "aer_simulator";
+        qiskit_cfg.qaoa_depth   = 1;
+        qiskit_cfg.shots        = 1024;
+        qiskit_cfg.problem_file = output_dir + "/quantum_problem.json";
+        qiskit_cfg.jobs_file    = output_dir + "/quantum_jobs.json";
+        qiskit_cfg.results_dir  = output_dir;
+        qiskit_cfg.params["num_bits_per_asset"] = 2.0;
+        auto qiskit_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qiskit_cfg);
+        runner.add_quantum_solver("qaoa_p1_aer_simulator", "quantum", qiskit_solver);
+    }
+
+    std::cout << "Running benchmark...\n";
+    auto result = runner.run(1);
+
+    result.print_summary();
+
+    std::string comparison_path = output_dir + "/comparison_results.json";
+    result.export_comparison_json(comparison_path);
+    std::cout << "Comparison results written to: " << comparison_path << "\n";
+
+    run_benchmark_viz(output_dir);
 }
 
 /**
@@ -533,6 +668,11 @@ int run(const CommandLineArgs &args)
         if (args.quantum_collect)
         {
             run_quantum_collect(args.output_dir);
+        }
+
+        if (args.benchmark)
+        {
+            run_benchmark(config, data, args.output_dir);
         }
 
         return 0;

@@ -87,7 +87,7 @@ namespace portfolio
             }
 
             std::string submit_cmd =
-                "python3 scripts/quantum/qiskit_submit.py"
+                get_python_executable() + " scripts/quantum/qiskit_submit.py"
                 " --problem-file " + quote(config_.problem_file) +
                 " --jobs-file " + quote(config_.jobs_file) +
                 " --backend " + quote(config_.backend) +
@@ -119,7 +119,7 @@ namespace portfolio
             }
 
             std::string collect_cmd =
-                "python3 scripts/quantum/qiskit_collect.py"
+                get_python_executable() + " scripts/quantum/qiskit_collect.py"
                 " --jobs-file " + quote(config_.jobs_file) +
                 " --results-dir " + quote(config_.results_dir) +
                 " --timeout-min " + std::to_string(config_.timeout_minutes);
@@ -218,7 +218,20 @@ namespace portfolio
 
         bool QiskitSolver::python3_available()
         {
-            return std::system("command -v python3 >/dev/null 2>&1") == 0;
+            std::string cmd = get_python_executable() + " --version >/dev/null 2>&1";
+            return std::system(cmd.c_str()) == 0;
+        }
+
+        std::string QiskitSolver::get_python_executable()
+        {
+            const char* venv = std::getenv("VIRTUAL_ENV");
+            if (venv)
+            {
+                std::string venv_python = std::string(venv) + "/bin/python3";
+                if (std::filesystem::exists(venv_python))
+                    return venv_python;
+            }
+            return "python3";
         }
 
     } // namespace quantum

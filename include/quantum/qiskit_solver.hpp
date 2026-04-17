@@ -71,6 +71,7 @@ namespace portfolio
             void write_problem_file(const QUBOFormulation &qubo) const;
             Eigen::VectorXd read_result_file();
             static bool python3_available();
+            static std::string get_python_executable();
         };
 
     } // namespace quantum
