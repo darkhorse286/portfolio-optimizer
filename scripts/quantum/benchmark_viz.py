@@ -65,10 +65,11 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
         results: List of result dictionaries
         output_path: Path to save the PNG file
     """
-    fig, ax = plt.subplots(figsize=(10, 3))
+    n_rows = len(results)
+    fig_height = max(2.0, 0.55 * (n_rows + 1) + 0.5)
+    fig, ax = plt.subplots(figsize=(14, fig_height))
     ax.axis('off')
 
-    # Prepare data
     data = []
     for res in results:
         row = [
@@ -78,7 +79,7 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
             f"{res['performance']['sharpe_ratio']:.3f}",
             f"{res['performance']['total_return'] * 100:.1f}%",
             f"{res['solution_quality_vs_classical']:.2f}x",
-            f"{res['solve_time_ms']:.1f}ms"
+            f"{res['solve_time_ms']:.1f}ms",
         ]
         data.append(row)
 
@@ -87,18 +88,22 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
     table = ax.table(cellText=data, colLabels=columns, loc='center', cellLoc='center')
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    table.scale(1.2, 1.2)
+    # Let matplotlib size columns to content, then add a little vertical padding
+    table.auto_set_column_width(list(range(len(columns))))
+    for (row, _col), cell in table.get_celld().items():
+        cell.set_height(0.12 if row == 0 else 0.10)
+        cell.PAD = 0.05
 
-    # Color vs Markowitz cells
+    # Color vs Markowitz column (index 5)
     for i, res in enumerate(results):
         quality = res["solution_quality_vs_classical"]
-        cell = table[(i+1, 5)]  # +1 for header
+        cell = table[(i + 1, 5)]
         if quality > 0.95:
-            cell.set_facecolor("#dcfce7")  # green
+            cell.set_facecolor("#dcfce7")
         elif 0.70 <= quality <= 0.95:
-            cell.set_facecolor("#fef3c7")  # amber
+            cell.set_facecolor("#fef3c7")
         else:
-            cell.set_facecolor("#fee2e2")  # red
+            cell.set_facecolor("#fee2e2")
 
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
@@ -144,43 +149,113 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
         ])
 
     template_str = """<!doctype html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; color: #111827; margin: 20px; }
-        h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-        .section { margin-bottom: 2rem; }
-        .metrics { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-        .metrics td, .metrics th { padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
-        .metrics tr:nth-child(even) { background: #f9fafb; }
-        .chart { margin-bottom: 18px; }
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            background: #f8fafc;
+            color: #111827;
+            margin: 0;
+            padding: 24px;
+        }
+        .page { max-width: 1100px; margin: 0 auto; }
+        h1 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin: 0 0 4px;
+            color: #0f172a;
+        }
+        .subtitle {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 32px;
+        }
+        h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #374151;
+            margin: 0 0 12px;
+            padding-bottom: 6px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .section {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px 24px;
+            margin-bottom: 24px;
+        }
+        .chart-wrap {
+            overflow-x: auto;
+        }
+        .chart-wrap img {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        .table-wrap {
+            overflow-x: auto;
+        }
+        table.metrics {
+            border-collapse: collapse;
+            width: 100%;
+            min-width: 560px;
+            font-size: 13px;
+        }
+        table.metrics th {
+            background: #f1f5f9;
+            color: #374151;
+            font-weight: 600;
+            text-align: left;
+            padding: 9px 14px;
+            border-bottom: 2px solid #e2e8f0;
+            white-space: nowrap;
+        }
+        table.metrics td {
+            padding: 8px 14px;
+            border-bottom: 1px solid #f1f5f9;
+            white-space: nowrap;
+        }
+        table.metrics tbody tr:hover { background: #f8fafc; }
     </style>
 </head>
 <body>
+<div class="page">
     <h1>{{ title }}</h1>
+    <p class="subtitle">Quantum vs classical portfolio optimization benchmark</p>
 
     <div class="section">
-        <h2>Solver Comparison</h2>
+        <h2>Solver Comparison — Equity Curves</h2>
+        <div class="chart-wrap">
         {% if equity_data_uri %}
-        <img alt="Equity Curves" src="{{ equity_data_uri }}" style="max-width: 100%;">
+            <img alt="Equity Curves" src="{{ equity_data_uri }}">
         {% else %}
-        <div>Equity chart not available.</div>
+            <p>Equity chart not available.</p>
         {% endif %}
+        </div>
     </div>
 
     <div class="section">
         <h2>Scaling Table</h2>
+        <div class="chart-wrap">
         {% if scaling_data_uri %}
-        <img alt="Scaling Table" src="{{ scaling_data_uri }}" style="max-width: 100%;">
+            <img alt="Scaling Table" src="{{ scaling_data_uri }}">
         {% else %}
-        <div>Scaling table not available.</div>
+            <p>Scaling table not available.</p>
         {% endif %}
+        </div>
     </div>
 
     <div class="section">
         <h2>Per-Solver Metrics</h2>
+        <div class="table-wrap">
         <table class="metrics">
             <thead>
                 <tr>
@@ -207,7 +282,9 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     </div>
+</div>
 </body>
 </html>"""
 
