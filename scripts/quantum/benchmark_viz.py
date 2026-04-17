@@ -35,13 +35,18 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
         if not nav_series:
             continue
 
-        # Normalize to 1.0
-        nav_values = [point["nav"] for point in nav_series]
+        # nav_series may be a list of floats or a list of {"nav", "date"} dicts
+        if nav_series and isinstance(nav_series[0], dict):
+            nav_values = [point["nav"] for point in nav_series]
+            x_axis = [point.get("date", i) for i, point in enumerate(nav_series)]
+        else:
+            nav_values = [float(v) for v in nav_series]
+            x_axis = list(range(len(nav_values)))
+
         if nav_values:
             first_nav = nav_values[0]
             normalized = [v / first_nav for v in nav_values]
-            dates = [point["date"] for point in nav_series]
-            plt.plot(dates, normalized, label=solver_name, color=color_map.get(solver_type, "#6b7280"))
+            plt.plot(x_axis, normalized, label=solver_name, color=color_map.get(solver_type, "#6b7280"))
 
     plt.xlabel("Date")
     plt.ylabel("Normalized NAV")

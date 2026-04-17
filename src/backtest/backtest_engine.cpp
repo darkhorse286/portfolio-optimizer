@@ -377,47 +377,38 @@ namespace portfolio
                             if (params_.verbose)
                                 std::cerr << "Skipping optimization on " << date << " - insufficient return observations\n";
                         }
-                        else
+                        else if (scheduler.is_calendar_trigger(date))
                         {
+                            // Only invoke the quantum optimizer on scheduled rebalance dates.
+                            // Calling it every day would spawn two Python subprocesses per
+                            // trading day (~252/year) instead of per rebalancing period.
                             Eigen::VectorXd expected = estimate_returns(window);
                             Eigen::MatrixXd cov = estimate_risk(window);
 
                             Eigen::VectorXd pre_weights = portfolio.current_weights();
-                            Eigen::VectorXd target_weights;
                             try
                             {
-                                target_weights = optimize_quantum(expected, cov, pre_weights, optimizer);
-                                bool do_rebalance = scheduler.should_rebalance(date, pre_weights, target_weights);
-                                if (do_rebalance)
+                                Eigen::VectorXd target_weights = optimize_quantum(expected, cov, pre_weights, optimizer);
+
+                                Eigen::VectorXd shares_traded = portfolio.set_target_weights(target_weights, prices);
+
+                                std::vector<TradeCost> costs;
+                                costs.reserve(static_cast<size_t>(shares_traded.size()));
+                                for (int i = 0; i < shares_traded.size(); ++i)
                                 {
-                                    // Execute trades
-                                    Eigen::VectorXd shares_traded = portfolio.set_target_weights(target_weights, prices);
-
-                                    // Build costs vector
-                                    std::vector<TradeCost> costs;
-                                    costs.reserve(static_cast<size_t>(shares_traded.size()));
-                                    for (int i = 0; i < shares_traded.size(); ++i)
-                                    {
-                                        TradeOrder o{tickers[static_cast<size_t>(i)], shares_traded[i], prices[i]};
-                                        costs.push_back(cost_model.calculate_cost(o));
-                                    }
-
-                                    double total_cost = cost_model.calculate_total_cost(shares_traded, prices, tickers);
-                                    if (total_cost > 0.0)
-                                    {
-                                        try
-                                        {
-                                            portfolio.deduct_costs(total_cost);
-                                        }
-                                        catch (...)
-                                        {
-                                        }
-                                    }
-
-                                    Eigen::VectorXd post_weights = portfolio.current_weights();
-                                    logger.log_rebalance(date, tickers, shares_traded, prices, costs, pre_weights, post_weights);
-                                    scheduler.record_rebalance(date);
+                                    TradeOrder o{tickers[static_cast<size_t>(i)], shares_traded[i], prices[i]};
+                                    costs.push_back(cost_model.calculate_cost(o));
                                 }
+
+                                double total_cost = cost_model.calculate_total_cost(shares_traded, prices, tickers);
+                                if (total_cost > 0.0)
+                                {
+                                    try { portfolio.deduct_costs(total_cost); } catch (...) {}
+                                }
+
+                                Eigen::VectorXd post_weights = portfolio.current_weights();
+                                logger.log_rebalance(date, tickers, shares_traded, prices, costs, pre_weights, post_weights);
+                                scheduler.record_rebalance(date);
                             }
                             catch (const std::exception &e)
                             {
