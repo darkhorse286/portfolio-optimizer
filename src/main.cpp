@@ -368,11 +368,8 @@ static void run_benchmark(
         config.optimizer.risk_free_rate);
     runner.add_classical_solver("markowitz_mv", mv_solver);
 
-    // Quantum-inspired — simulated annealing
+    // Quantum-inspired — simulated annealing (use struct defaults)
     portfolio::quantum::SimulatedAnnealingConfig sa_config;
-    sa_config.max_iterations    = 10000;
-    sa_config.initial_temperature = 1.0;
-    sa_config.cooling_rate      = 0.99;
     auto sa_solver = std::make_shared<portfolio::quantum::SimulatedAnnealingSolver>(sa_config);
     runner.add_quantum_solver("sa_classical", "quantum_inspired", sa_solver);
 
