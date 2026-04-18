@@ -271,17 +271,48 @@ namespace portfolio
                 run["circuit_execution_us"] = res.mean_circuit_execution_us;
                 run["solution_quality_vs_classical"] = res.solution_quality_vs_classical;
 
-                // nav_series with dates for the viz
+                // nav_series with dates for the viz — cap at 1000 entries
                 nlohmann::json nav_arr = nlohmann::json::array();
-                for (size_t i = 0; i < res.nav_series.size(); ++i)
                 {
-                    nlohmann::json point;
-                    point["nav"] = res.nav_series[i];
-                    if (i < res.date_series.size())
-                        point["date"] = res.date_series[i];
+                    const auto& nav = res.nav_series;
+                    size_t total = nav.size();
+                    constexpr size_t kMaxPoints = 1000;
+
+                    // Build evenly-spaced index list (always include first and last)
+                    std::vector<size_t> indices;
+                    if (total <= kMaxPoints)
+                    {
+                        indices.resize(total);
+                        std::iota(indices.begin(), indices.end(), 0);
+                    }
                     else
-                        point["date"] = static_cast<int>(i);
-                    nav_arr.push_back(point);
+                    {
+                        indices.reserve(kMaxPoints);
+                        for (size_t k = 0; k < kMaxPoints; ++k)
+                            indices.push_back(static_cast<size_t>(
+                                std::round(static_cast<double>(k) * (total - 1) / (kMaxPoints - 1))));
+                    }
+
+                    double peak = nav.empty() ? 1.0 : nav.front();
+                    for (size_t idx : indices)
+                    {
+                        double v = nav[idx];
+                        if (v > peak) peak = v;
+                        double dd = (peak > 0.0) ? -(peak - v) / peak : 0.0;
+                        double ret = (idx == 0 || nav[idx - 1] <= 0.0)
+                                     ? 0.0
+                                     : (v - nav[idx - 1]) / nav[idx - 1];
+
+                        nlohmann::json point;
+                        point["nav"] = v;
+                        point["return"] = ret;
+                        point["drawdown"] = dd;
+                        if (idx < res.date_series.size())
+                            point["date"] = res.date_series[idx];
+                        else
+                            point["date"] = static_cast<int>(idx);
+                        nav_arr.push_back(point);
+                    }
                 }
                 run["nav_series"] = nav_arr;
 
