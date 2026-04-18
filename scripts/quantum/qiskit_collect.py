@@ -10,7 +10,7 @@ import time
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from qiskit import QuantumCircuit, transpile
 
@@ -130,8 +130,56 @@ def build_qaoa_circuit(
     return circuit
 
 
-def select_top_bitstring(counts: Dict[str, int]) -> str:
-    return max(counts.items(), key=lambda item: item[1])[0]
+def select_best_bitstring(counts: Dict[str, int], q_matrix: List[List[float]]) -> str:
+    """Return the bitstring with the lowest QUBO objective value among measured samples."""
+    return min(counts.keys(), key=lambda bs: objective_value(q_matrix, bs))
+
+
+def _qaoa_expected_energy(
+    params: List[float],
+    num_qubits: int,
+    q_matrix: List[List[float]],
+    qaoa_depth: int,
+    backend_instance: Any,
+    shots: int,
+) -> float:
+    """Expected QUBO energy E[H] over the measurement distribution for given (gamma, beta)."""
+    gamma, beta = float(params[0]), float(params[1])
+    circuit = build_qaoa_circuit(num_qubits, q_matrix, qaoa_depth, gamma, beta)
+    transpiled = transpile(circuit, backend_instance)
+    result = backend_instance.run(transpiled, shots=shots).result()
+    counts = result.get_counts()
+    total = sum(counts.values())
+    return sum((cnt / total) * objective_value(q_matrix, bs) for bs, cnt in counts.items())
+
+
+def optimize_qaoa_parameters(
+    num_qubits: int,
+    q_matrix: List[List[float]],
+    qaoa_depth: int,
+    backend_instance: Any,
+    shots: int = 512,
+    max_iter: int = 100,
+) -> Tuple[float, float]:
+    """Optimize QAOA variational parameters (gamma, beta) via COBYLA.
+
+    Minimizes the expected QUBO energy over the measurement distribution.
+    Returns (gamma_opt, beta_opt).
+    """
+    try:
+        from scipy.optimize import minimize
+    except ImportError:
+        print("Warning: scipy not available; using default QAOA parameters.", file=sys.stderr)
+        return 0.5, 0.5
+
+    result = minimize(
+        _qaoa_expected_energy,
+        x0=[0.5, 0.5],
+        args=(num_qubits, q_matrix, qaoa_depth, backend_instance, shots),
+        method="COBYLA",
+        options={"maxiter": max_iter, "rhobeg": 0.5},
+    )
+    return float(result.x[0]), float(result.x[1])
 
 
 def result_metadata_time_us(result: Any) -> float:
@@ -150,33 +198,52 @@ def collect_aer_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
     with problem_file.open("r", encoding="utf-8") as f:
         problem = json.load(f)
 
-    params = job.get("circuit_params", {})
-    gamma = float(params.get("gamma", 0.1))
-    beta = float(params.get("beta", 0.1))
-    qaoa_depth = int(params.get("qaoa_depth", job.get("qaoa_depth", 1)))
-
+    qaoa_depth = int(job.get("circuit_params", {}).get("qaoa_depth", job.get("qaoa_depth", 1)))
     num_qubits = int(problem["num_variables"])
+    num_assets = int(problem["num_assets"])
+    num_bits_per_asset = int(problem["num_bits_per_asset"])
     q_matrix = problem["Q"]
     shots = int(job["shots"])
     solver_name = f"qaoa_p{qaoa_depth}_{job['backend']}"
 
     try:
         from qiskit_aer import AerSimulator
-
         backend_instance = AerSimulator()
-        circuit = build_qaoa_circuit(num_qubits, q_matrix, qaoa_depth, gamma, beta)
+
+        # Optimize variational parameters via COBYLA
+        print(f"  Optimizing QAOA parameters ({num_qubits} qubits, p={qaoa_depth})...")
+        gamma_opt, beta_opt = optimize_qaoa_parameters(
+            num_qubits, q_matrix, qaoa_depth, backend_instance,
+            shots=min(shots, 512), max_iter=100,
+        )
+        print(f"  Optimal params: gamma={gamma_opt:.4f} beta={beta_opt:.4f}")
+
+        # Final measurement with optimized parameters
+        circuit = build_qaoa_circuit(num_qubits, q_matrix, qaoa_depth, gamma_opt, beta_opt)
         transpiled = transpile(circuit, backend_instance)
         start_time = time.time()
-        aer_job = backend_instance.run(transpiled, shots=shots)
-        result = aer_job.result()
+        result = backend_instance.run(transpiled, shots=shots).result()
         end_time = time.time()
         counts = result.get_counts()
-        bitstring = select_top_bitstring(counts)
-        weights = decode_bitstring(
-            bitstring, int(problem["num_bits_per_asset"]), int(problem["num_assets"])
+
+        # Select the sample with the lowest QUBO objective value
+        bitstring = select_best_bitstring(counts, q_matrix)
+        raw_weights = decode_bitstring(bitstring, num_bits_per_asset, num_assets)
+
+        # Normalize so weights sum to 1; fall back to equal-weight if all-zero bitstring
+        total_weight = sum(raw_weights)
+        if total_weight > 1e-9:
+            weights = [w / total_weight for w in raw_weights]
+        else:
+            weights = [1.0 / num_assets] * num_assets
+
+        obj = objective_value(q_matrix, bitstring)
+        convergence_info = (
+            f"gamma_opt={gamma_opt:.4f} beta_opt={beta_opt:.4f} "
+            f"obj={obj:.6f} bitstring_count={counts[bitstring]}/{shots}"
         )
-        objective = objective_value(q_matrix, bitstring)
-        result_payload = {
+
+        return {
             "schema_version": "1.0",
             "job_id": job["job_id"],
             "problem_id": problem["problem_id"],
@@ -184,16 +251,15 @@ def collect_aer_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
             "execution_backend": job["backend"],
             "weights": weights,
             "bitstring": bitstring,
-            "objective_value": objective,
+            "objective_value": obj,
             "circuit_depth": int(transpiled.depth()),
             "circuit_execution_us": -1.0,
             "shots": shots,
             "solve_time_ms": float((end_time - start_time) * 1000.0),
-            "convergence_info": f"top bitstring count: {counts[bitstring]}/{shots}",
+            "convergence_info": convergence_info,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "status": "COMPLETED",
         }
-        return result_payload
     except Exception as exc:
         raise RuntimeError(f"Aer collection failed: {exc}")
 
@@ -286,11 +352,17 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
             bitstring = ""
             weights = []
         else:
-            bitstring = select_top_bitstring(counts)
-            weights = decode_bitstring(
+            bitstring = select_best_bitstring(counts, problem["Q"])
+            raw_weights = decode_bitstring(
                 bitstring, int(problem["num_bits_per_asset"]), int(problem["num_assets"])
             )
-            convergence_info = f"top bitstring count: {counts[bitstring]}/{job['shots']}"
+            total_weight = sum(raw_weights)
+            weights = (
+                [w / total_weight for w in raw_weights]
+                if total_weight > 1e-9
+                else [1.0 / int(problem["num_assets"])] * int(problem["num_assets"])
+            )
+            convergence_info = f"min-energy bitstring count: {counts[bitstring]}/{job['shots']}"
 
         execution_us = result_metadata_time_us(result)
         circuit = build_qaoa_circuit(

@@ -106,6 +106,7 @@ namespace portfolio
             std::vector<double> volatilities;
             std::vector<double> solve_times;
             std::vector<double> circuit_times;
+            std::vector<std::vector<double>> all_nav_series;
 
             for (int i = 0; i < num_runs; ++i)
             {
@@ -114,6 +115,7 @@ namespace portfolio
                     portfolio::backtest::BacktestEngine engine(backtest_params_);
                     portfolio::backtest::BacktestResult bt_result;
 
+                    auto t_start = std::chrono::high_resolution_clock::now();
                     if (s.classical)
                     {
                         bt_result = engine.run(data_, *s.classical);
@@ -122,6 +124,8 @@ namespace portfolio
                     {
                         bt_result = engine.run(data_, *s.quantum);
                     }
+                    auto t_end = std::chrono::high_resolution_clock::now();
+                    double wall_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
 
                     if (bt_result.success)
                     {
@@ -133,20 +137,22 @@ namespace portfolio
 
                         if (s.quantum)
                         {
+                            // quantum solver reports per-rebalance solve time internally
                             solve_times.push_back(s.quantum->solve_time_ms());
                             circuit_times.push_back(s.quantum->circuit_execution_us());
                         }
                         else
                         {
-                            solve_times.push_back(0.0);  // or measure?
+                            solve_times.push_back(wall_ms);
                             circuit_times.push_back(-1.0);
                         }
 
                         result.successful_runs++;
+                        all_nav_series.push_back(bt_result.nav_series);
 
-                        // Store nav_series and dates from the last successful run
-                        result.nav_series = bt_result.nav_series;
-                        result.date_series = bt_result.dates;
+                        // Dates are identical across runs; keep from first successful run
+                        if (result.date_series.empty())
+                            result.date_series = bt_result.dates;
                     }
                 }
                 catch (const std::exception& e)
@@ -155,31 +161,66 @@ namespace portfolio
                 }
             }
 
+            // Element-wise mean of nav_series so the equity curve matches the averaged metrics
+            if (!all_nav_series.empty())
+            {
+                size_t len = all_nav_series[0].size();
+                result.nav_series.assign(len, 0.0);
+                for (const auto& nav : all_nav_series)
+                {
+                    size_t usable = std::min(len, nav.size());
+                    for (size_t k = 0; k < usable; ++k)
+                        result.nav_series[k] += nav[k];
+                }
+                double n = static_cast<double>(all_nav_series.size());
+                for (double& v : result.nav_series)
+                    v /= n;
+            }
+
             if (result.successful_runs > 0)
             {
-                auto mean_std = [](const std::vector<double>& v) {
-                    double sum = std::accumulate(v.begin(), v.end(), 0.0);
-                    double mean = sum / v.size();
-                    double sq_sum = std::inner_product(v.begin(), v.end(), v.begin(), 0.0);
-                    double std = std::sqrt(sq_sum / v.size() - mean * mean);
-                    return std::make_pair(mean, std);
+                auto mean_val = [](const std::vector<double>& v) {
+                    return std::accumulate(v.begin(), v.end(), 0.0) / v.size();
                 };
 
-                auto [m_sharpe, s_sharpe] = mean_std(sharpes);
-                result.mean_sharpe = m_sharpe;
-                result.std_sharpe = s_sharpe;
+                // Solve time and circuit time: mean across runs (unchanged)
+                result.mean_solve_time_ms = mean_val(solve_times);
+                result.mean_circuit_execution_us = mean_val(circuit_times);
 
-                auto [m_ret, s_ret] = mean_std(returns);
-                result.mean_portfolio_return = m_ret;
+                // Sharpe, return, volatility: recompute from the averaged NAV series
+                // so these metrics are self-consistent with the equity curve.
+                const auto& nav = result.nav_series;
+                if (nav.size() >= 2 && nav.front() > 0.0)
+                {
+                    std::vector<double> daily_rets;
+                    daily_rets.reserve(nav.size() - 1);
+                    for (size_t k = 1; k < nav.size(); ++k)
+                        if (nav[k - 1] > 0.0)
+                            daily_rets.push_back((nav[k] - nav[k - 1]) / nav[k - 1]);
 
-                auto [m_vol, s_vol] = mean_std(volatilities);
-                result.mean_portfolio_volatility = m_vol;
+                    double total_ret = nav.back() / nav.front() - 1.0;
+                    double ann_ret   = std::pow(1.0 + total_ret, 252.0 / nav.size()) - 1.0;
+                    double mean_r    = std::accumulate(daily_rets.begin(), daily_rets.end(), 0.0)
+                                       / daily_rets.size();
+                    double sq_sum    = std::inner_product(daily_rets.begin(), daily_rets.end(),
+                                                          daily_rets.begin(), 0.0);
+                    double ann_vol   = std::sqrt(sq_sum / daily_rets.size() - mean_r * mean_r)
+                                       * std::sqrt(252.0);
 
-                auto [m_solve, s_solve] = mean_std(solve_times);
-                result.mean_solve_time_ms = m_solve;
-
-                auto [m_circuit, s_circuit] = mean_std(circuit_times);
-                result.mean_circuit_execution_us = m_circuit;
+                    result.mean_portfolio_return     = total_ret;
+                    result.mean_portfolio_volatility = ann_vol;
+                    result.mean_sharpe               = (ann_vol > 0.0)
+                        ? (ann_ret - backtest_params_.risk_free_rate) / ann_vol
+                        : 0.0;
+                    result.std_sharpe = 0.0; // std dev across runs kept as 0; mean is from averaged curve
+                }
+                else
+                {
+                    result.mean_sharpe               = mean_val(sharpes);
+                    result.std_sharpe                = 0.0;
+                    result.mean_portfolio_return     = mean_val(returns);
+                    result.mean_portfolio_volatility = mean_val(volatilities);
+                }
             }
             else
             {
