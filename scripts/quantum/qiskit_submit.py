@@ -61,14 +61,14 @@ def parse_args() -> argparse.Namespace:
 def validate_ibm_credentials() -> bool:
     """Validate IBM Quantum credentials and return True on success, False with warning on failure."""
     token = os.environ.get("IBM_QUANTUM_TOKEN")
-    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "ibm-q/open/main")
+    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
     if not token:
         print("FAIL: IBM_QUANTUM_TOKEN environment variable is not set.", file=sys.stderr)
         return False
 
     try:
         from qiskit_ibm_runtime import QiskitRuntimeService
-        service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+        service = QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
         # Try to list backends to verify
         backends = service.backends()
         if backends:
@@ -174,8 +174,8 @@ def main() -> int:
             sys.exit(1)
         from qiskit_ibm_runtime import QiskitRuntimeService
         token = os.environ.get("IBM_QUANTUM_TOKEN")
-        instance = os.environ.get("IBM_QUANTUM_INSTANCE", "ibm-q/open/main")
-        service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+        instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
+        service = QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
         backends = service.backends()
         print("Available IBM Quantum backends:")
         for backend in backends:
@@ -250,9 +250,9 @@ def main() -> int:
             from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2
 
             service = (
-                QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+                QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
                 if instance
-                else QiskitRuntimeService(channel="ibm_quantum", token=token)
+                else QiskitRuntimeService(channel="ibm_quantum_platform", token=token)
             )
             backend = service.backend(backend_name)
             pre_depth = int(circuit.depth())

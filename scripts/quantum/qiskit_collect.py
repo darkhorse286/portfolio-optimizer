@@ -403,9 +403,9 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
         from qiskit_ibm_runtime import QiskitRuntimeService
 
         service = (
-            QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+            QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
             if instance
-            else QiskitRuntimeService(channel="ibm_quantum", token=token)
+            else QiskitRuntimeService(channel="ibm_quantum_platform", token=token)
         )
         backend = service.backend(job["backend"])
         runner_job = service.job(job["job_id"])
@@ -633,7 +633,7 @@ def main() -> int:
                     continue
                 try:
                     from qiskit_ibm_runtime import QiskitRuntimeService
-                    service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+                    service = QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
                     runner_job = service.job(job["job_id"])
                     status = runner_job.status().name
                     print(f"Job {job['job_id']}: IBM - {status}")

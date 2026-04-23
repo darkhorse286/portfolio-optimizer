@@ -61,7 +61,7 @@
     "timeout_minutes": 30,
     "poll_interval_seconds": 30,
     "error_mitigation": false,
-    "instance": "ibm-q/open/main"
+    "instance": ""
   },
   
   "risk_model": {

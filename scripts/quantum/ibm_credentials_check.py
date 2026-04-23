@@ -22,7 +22,7 @@ def check_token() -> bool:
 
 def check_instance() -> bool:
     """Check if IBM_QUANTUM_INSTANCE is set or defaults."""
-    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "ibm-q/open/main")
+    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
     print(f"PASS: IBM_QUANTUM_INSTANCE is set to '{instance}'.")
     return True
 
@@ -30,13 +30,13 @@ def check_instance() -> bool:
 def check_authentication() -> bool:
     """Attempt authentication with IBM Quantum."""
     token = os.environ.get("IBM_QUANTUM_TOKEN")
-    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "ibm-q/open/main")
+    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
     if not token:
         return False
 
     try:
         from qiskit_ibm_runtime import QiskitRuntimeService
-        service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+        service = QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
         backends = service.backends()
         if backends:
             print("PASS: Successfully authenticated with IBM Quantum.")
@@ -52,13 +52,13 @@ def check_authentication() -> bool:
 def list_backends() -> None:
     """List first 5 available backends."""
     token = os.environ.get("IBM_QUANTUM_TOKEN")
-    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "ibm-q/open/main")
+    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
     if not token:
         return
 
     try:
         from qiskit_ibm_runtime import QiskitRuntimeService
-        service = QiskitRuntimeService(channel="ibm_quantum", token=token, instance=instance)
+        service = QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
         backends = service.backends()[:5]
         print("Available backends (first 5):")
         for backend in backends:
