@@ -55,7 +55,7 @@
   
   "ibm_quantum": {
     "enabled": false,
-    "backend": "ibm_brisbane",
+    "backend": "ibm_fez",
     "shots": 1024,
     "qaoa_depth": 1,
     "timeout_minutes": 30,
