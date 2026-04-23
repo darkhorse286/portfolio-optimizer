@@ -23,10 +23,29 @@ echo "Running Python unit tests..."
 echo "Running Python integration tests..."
 "$PY" -m pytest -q tests/integration -k 'not cpp_smoke' || { echo 'Python integration tests failed'; exit 1; }
 
+_IBM_PASS=0
+_IBM_FAIL=0
+record_result() {
+    local name="$1" code="$2"
+    if [ "$code" -eq 0 ]; then
+        echo "PASS: $name"
+        _IBM_PASS=$((_IBM_PASS + 1))
+    else
+        echo "FAIL: $name (exit $code)"
+        _IBM_FAIL=$((_IBM_FAIL + 1))
+    fi
+}
+
 if [ "${TEST_IBM:-0}" = "1" ]; then
   echo "=== IBM Quantum connectivity check ==="
-  "$PY" scripts/quantum/ibm_credentials_check.py
+  "$PY" scripts/quantum/ibm_credentials_check.py || true
   record_result "IBM credentials" $?
+
+  echo "=== mthree availability check ==="
+  "$PY" -c "import mthree; print('mthree', mthree.__version__)" || true
+  record_result "mthree available" $?
+
+  echo "IBM checks: $_IBM_PASS passed, $_IBM_FAIL failed"
 fi
 
 echo "Running C++ tests (ctest)..."

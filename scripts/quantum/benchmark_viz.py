@@ -39,6 +39,42 @@ def _display_type(solver_type: str) -> str:
     return SOLVER_TYPE_MAP.get(solver_type, solver_type)
 
 
+def _try_augment_runs_from_result_files(
+    runs: List[Dict[str, Any]], results_dir: Path
+) -> None:
+    """Merge Phase 4 fields from quantum_result_*.json files into runs in-place.
+
+    For each run, looks for a matching quantum_result file by solver_name and
+    merges any Phase 4 fields not already present in the run dict.
+
+    Args:
+        runs: List of run dicts from comparison_results.json (mutated in-place).
+        results_dir: Directory to scan for quantum_result_*.json files.
+    """
+    result_files = list(results_dir.glob("quantum_result_*.json"))
+    for result_file in result_files:
+        try:
+            with result_file.open("r", encoding="utf-8") as f:
+                qr = json.load(f)
+        except Exception:
+            continue
+        solver_name = qr.get("solver_name", "")
+        for run in runs:
+            if run.get("solver_name") == solver_name:
+                for key in (
+                    "circuit_depth",
+                    "pre_transpilation_depth",
+                    "backend_calibration_date",
+                    "error_mitigation_method",
+                    "signal_quality",
+                    "top_bitstring_fraction",
+                    "metadata_key_used",
+                    "physical_qubits",
+                ):
+                    if key in qr and key not in run:
+                        run[key] = qr[key]
+
+
 def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) -> None:
     """Plot normalized equity curves for all solvers.
 
@@ -96,28 +132,31 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
     """
     n_rows = len(results)
     fig_height = max(2.0, 0.55 * (n_rows + 1) + 0.5)
-    fig, ax = plt.subplots(figsize=(14, fig_height))
+    fig, ax = plt.subplots(figsize=(16, fig_height))
     ax.axis('off')
 
     data = []
     for res in results:
+        backend = res.get("execution_backend", "")
+        is_ibm = backend.startswith("ibm_")
+        circuit_depth_str = str(res["circuit_depth"]) if is_ibm and res.get("circuit_depth") else "-"
         row = [
             _display_name(res["solver_name"]),
             _display_type(res["solver_type"]),
-            res["execution_backend"],
+            backend,
             f"{res['performance']['sharpe_ratio']:.3f}",
             f"{res['performance']['total_return'] * 100:.1f}%",
             f"{res['solution_quality_vs_classical']:.2f}x",
             f"{res['solve_time_ms']:.1f}ms",
+            circuit_depth_str,
         ]
         data.append(row)
 
-    columns = ["Solver", "Type", "Backend", "Sharpe", "Total Return", "vs Markowitz", "Solve Time (ms)"]
+    columns = ["Solver", "Type", "Backend", "Sharpe", "Total Return", "vs Markowitz", "Solve Time (ms)", "Circuit Depth"]
 
     table = ax.table(cellText=data, colLabels=columns, loc='center', cellLoc='center')
     table.auto_set_font_size(False)
     table.set_fontsize(10)
-    # Let matplotlib size columns to content, then add a little vertical padding
     table.auto_set_column_width(list(range(len(columns))))
     for (row, _col), cell in table.get_celld().items():
         cell.set_height(0.12 if row == 0 else 0.10)
@@ -144,13 +183,14 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
     """Build self-contained HTML report.
 
     Args:
-        metrics_by_solver: Metrics grouped by solver
+        metrics_by_solver: Metrics grouped by solver (may include Phase 4 fields
+            such as circuit_depth, backend_calibration_date, error_mitigation_method,
+            and signal_quality when augmented from quantum_result files).
         comparison_png: Path to comparison equity curves PNG
         scaling_png: Path to scaling table PNG
         output_path: Path to write HTML
         title: Report title
     """
-    # Encode images
     def encode_png(path: str) -> str:
         try:
             with open(path, "rb") as fh:
@@ -163,7 +203,7 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
     equity_data_uri = encode_png(comparison_png)
     scaling_data_uri = encode_png(scaling_png)
 
-    # Build metrics table
+    # Per-solver metrics table rows
     rows = []
     for solver, metrics in metrics_by_solver.items():
         perf = metrics.get("performance", {})
@@ -174,7 +214,30 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
             f"{perf.get('sharpe_ratio', 0):.3f}",
             f"{perf.get('total_return', 0) * 100:.1f}%",
             f"{perf.get('annualized_volatility', 0) * 100:.1f}%",
-            f"{perf.get('max_drawdown', 0) * 100:.1f}%"  # already negative
+            f"{perf.get('max_drawdown', 0) * 100:.1f}%"
+        ])
+
+    # Hardware notes: collect IBM runs that have Phase 4 metadata
+    ibm_runs = [
+        (solver, metrics)
+        for solver, metrics in metrics_by_solver.items()
+        if metrics.get("execution_backend", "").startswith("ibm_")
+    ]
+    has_ibm_runs = bool(ibm_runs)
+
+    hw_rows = []
+    has_low_signal = False
+    for solver, metrics in ibm_runs:
+        sq = metrics.get("signal_quality", "")
+        if sq == "low":
+            has_low_signal = True
+        hw_rows.append([
+            _display_name(solver),
+            metrics.get("execution_backend", ""),
+            str(metrics.get("circuit_depth", "N/A")),
+            metrics.get("backend_calibration_date", "N/A"),
+            metrics.get("error_mitigation_method", "N/A"),
+            "ok" if sq == "ok" else ("low — results may be noise-dominated" if sq == "low" else sq or "N/A"),
         ])
 
     template_str = """<!doctype html>
@@ -221,17 +284,18 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
             padding: 20px 24px;
             margin-bottom: 24px;
         }
-        .chart-wrap {
-            overflow-x: auto;
+        .callout {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #92400e;
         }
-        .chart-wrap img {
-            display: block;
-            max-width: 100%;
-            height: auto;
-        }
-        .table-wrap {
-            overflow-x: auto;
-        }
+        .chart-wrap { overflow-x: auto; }
+        .chart-wrap img { display: block; max-width: 100%; height: auto; }
+        .table-wrap { overflow-x: auto; }
         table.metrics {
             border-collapse: collapse;
             width: 100%;
@@ -259,6 +323,14 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
 <div class="page">
     <h1>{{ title }}</h1>
     <p class="subtitle">Quantum vs classical portfolio optimization benchmark</p>
+
+    {% if has_low_signal %}
+    <div class="callout">
+        <strong>Notice:</strong> One or more IBM hardware results show low signal quality
+        (top bitstring &lt; 5% of shots). These results reflect current NISQ hardware noise
+        rather than algorithmic performance. Aer simulation results provide the noise-free baseline.
+    </div>
+    {% endif %}
 
     <div class="section">
         <h2>Solver Comparison — Equity Curves</h2>
@@ -313,12 +385,53 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
         </table>
         </div>
     </div>
+
+    {% if has_ibm_runs %}
+    <div class="section">
+        <h2>Hardware notes</h2>
+        <div class="table-wrap">
+        <table class="metrics">
+            <thead>
+                <tr>
+                    <th>Solver</th>
+                    <th>Backend</th>
+                    <th>Circuit Depth</th>
+                    <th>Calibration Date</th>
+                    <th>Error Mitigation</th>
+                    <th>Signal Quality</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in hw_rows %}
+                <tr>
+                    <td>{{ row[0] }}</td>
+                    <td>{{ row[1] }}</td>
+                    <td>{{ row[2] }}</td>
+                    <td>{{ row[3] }}</td>
+                    <td>{{ row[4] }}</td>
+                    <td>{{ row[5] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+    {% endif %}
+
 </div>
 </body>
 </html>"""
 
     tmpl = Template(template_str)
-    html = tmpl.render(title=title, rows=rows, equity_data_uri=equity_data_uri, scaling_data_uri=scaling_data_uri)
+    html = tmpl.render(
+        title=title,
+        rows=rows,
+        equity_data_uri=equity_data_uri,
+        scaling_data_uri=scaling_data_uri,
+        has_ibm_runs=has_ibm_runs,
+        hw_rows=hw_rows,
+        has_low_signal=has_low_signal,
+    )
 
     with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(html)
@@ -346,6 +459,9 @@ def main() -> None:
 
     data = load_comparison_results(args.comparison_file)
     runs = data.get("runs", [])
+
+    # Augment runs with Phase 4 fields from quantum_result_*.json files
+    _try_augment_runs_from_result_files(runs, args.output_dir)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 

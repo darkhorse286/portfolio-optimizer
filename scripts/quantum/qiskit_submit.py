@@ -50,6 +50,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Authenticate with IBM, print available backends with qubit counts and queue depths, then exit 0.",
     )
+    parser.add_argument(
+        "--error-mitigation",
+        action="store_true",
+        help="Enable mthree readout error correction when collecting IBM jobs.",
+    )
     return parser.parse_args()
 
 
@@ -194,7 +199,9 @@ def main() -> int:
 
     circuit = build_qaoa_circuit(num_variables, q_matrix, qaoa_depth, 0.1, 0.1)
 
-    circuit_depth = 0
+    pre_depth: int = 0
+    circuit_depth: int = 0
+    physical_qubits: List[int] = []
 
     if backend_name == "aer_simulator":
         try:
@@ -214,8 +221,11 @@ def main() -> int:
                 return 1
 
             backend_instance = AerSimulator()
-            circuit_depth = int(circuit.depth())
-            job = backend_instance.run(circuit, shots=shots)
+            pre_depth = int(circuit.depth())
+            transpiled_aer = transpile(circuit, backend_instance, optimization_level=1)
+            circuit_depth = int(transpiled_aer.depth())
+            physical_qubits = list(range(num_variables))
+            job = backend_instance.run(transpiled_aer, shots=shots)
             result = job.result()
             if not result.success:
                 status = getattr(result, "status", "simulation failed")
@@ -245,8 +255,19 @@ def main() -> int:
                 else QiskitRuntimeService(channel="ibm_quantum", token=token)
             )
             backend = service.backend(backend_name)
+            pre_depth = int(circuit.depth())
             transpiled = transpile(circuit, backend=backend, optimization_level=1)
             circuit_depth = int(transpiled.depth())
+            try:
+                layout = transpiled.layout
+                if layout is not None and getattr(layout, "final_layout", None) is not None:
+                    physical_qubits = sorted(layout.final_layout.get_physical_bits().keys())
+                else:
+                    physical_qubits = list(range(num_variables))
+            except Exception:
+                physical_qubits = list(range(num_variables))
+            print(f"  Circuit depth: {pre_depth} (logical) → {circuit_depth} (post-transpile)", file=sys.stderr)
+            print(f"  Physical qubits: {physical_qubits}", file=sys.stderr)
             sampler = SamplerV2(mode=backend)
             job = sampler.run([transpiled], shots=shots)
             job_id = job.job_id()
@@ -270,8 +291,11 @@ def main() -> int:
             "gamma": 0.1,
             "beta": 0.1,
             "qaoa_depth": qaoa_depth,
+            "error_mitigation": args.error_mitigation,
         },
+        "pre_transpilation_depth": pre_depth,
         "circuit_depth": circuit_depth,
+        "physical_qubits": physical_qubits,
     }
 
     append_job_entry(jobs_file, job_entry)

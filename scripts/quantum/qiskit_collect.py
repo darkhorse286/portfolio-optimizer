@@ -182,12 +182,107 @@ def optimize_qaoa_parameters(
     return float(result.x[0]), float(result.x[1])
 
 
-def result_metadata_time_us(result: Any) -> float:
-    metadata = getattr(result, "metadata", {}) or {}
-    time_taken = metadata.get("time_taken")
-    if isinstance(time_taken, (int, float)):
-        return float(time_taken) * 1e6
-    return -1.0
+def extract_execution_us(result: Any, job: Any) -> Tuple[float, str]:
+    """Extract QPU execution time in microseconds.
+
+    Tries multiple known metadata keys in priority order across different
+    IBM Runtime versions, then falls back to job-level timestamps.
+
+    Args:
+        result: PrimitiveResult or similar result object from the job.
+        job: IBM runtime job object (for fallback metrics).
+
+    Returns:
+        Tuple of (time_us, key_name_used).
+    """
+    # Try execution_spans first (SamplerV2, current API)
+    try:
+        spans = result.metadata['execution']['execution_spans']
+        if spans:
+            delta = spans[0].stop - spans[0].start
+            us = delta.total_seconds() * 1e6
+            return us, 'execution_spans'
+    except (KeyError, AttributeError, IndexError, TypeError):
+        pass
+
+    # Try time_taken (older backends, returns seconds)
+    try:
+        return result.metadata['time_taken'] * 1e6, 'time_taken'
+    except (KeyError, TypeError):
+        pass
+
+    # Try job-level timing as fallback
+    try:
+        metrics = job.metrics()
+        if 'timestamps' in metrics:
+            t = metrics['timestamps']
+            if 'running' in t and 'finished' in t:
+                fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
+                start = datetime.strptime(t['running'], fmt)
+                end = datetime.strptime(t['finished'], fmt)
+                return (end - start).total_seconds() * 1e6, 'job_metrics'
+    except Exception:
+        pass
+
+    return -1.0, 'unavailable'
+
+
+def extract_counts(pub_result: Any) -> Dict[str, int]:
+    """Extract bitstring counts from a SamplerV2 PubResult.
+
+    Handles varying classical register names across IBM backend versions.
+
+    Args:
+        pub_result: SamplerV2 PubResult object.
+
+    Returns:
+        Dict mapping bitstring to count.
+
+    Raises:
+        ValueError: If no BitArray field is found in PubResult data.
+    """
+    # Try named register 'meas' first
+    try:
+        return pub_result.data.meas.get_counts()
+    except AttributeError:
+        pass
+
+    # Try register 'c'
+    try:
+        return pub_result.data.c.get_counts()
+    except AttributeError:
+        pass
+
+    # Iterate all fields in data to find a BitArray
+    try:
+        from qiskit.primitives.containers.bit_array import BitArray
+        for field_name in pub_result.data.__dataclass_fields__:
+            field = getattr(pub_result.data, field_name)
+            if isinstance(field, BitArray):
+                return field.get_counts()
+    except Exception:
+        pass
+
+    raise ValueError(
+        "Could not find BitArray in PubResult data fields: "
+        + str(list(getattr(pub_result.data, "__dataclass_fields__", {}).keys()))
+    )
+
+
+def _compute_signal_quality(counts: Dict[str, int]) -> Tuple[float, str]:
+    """Compute top-bitstring fraction and signal quality label.
+
+    Args:
+        counts: Bitstring measurement counts.
+
+    Returns:
+        Tuple of (top_fraction, quality) where quality is 'ok' or 'low'.
+    """
+    total = sum(counts.values())
+    top = max(counts.values()) if counts else 0
+    fraction = top / total if total > 0 else 0.0
+    quality = "low" if fraction < 0.05 else "ok"
+    return fraction, quality
 
 
 def collect_aer_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
@@ -220,11 +315,16 @@ def collect_aer_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
 
         # Final measurement with optimized parameters
         circuit = build_qaoa_circuit(num_qubits, q_matrix, qaoa_depth, gamma_opt, beta_opt)
+        pre_depth = int(circuit.depth())
         transpiled = transpile(circuit, backend_instance)
+        post_depth = int(transpiled.depth())
+
         start_time = time.time()
         result = backend_instance.run(transpiled, shots=shots).result()
         end_time = time.time()
         counts = result.get_counts()
+
+        top_fraction, signal_quality = _compute_signal_quality(counts)
 
         # Select the sample with the lowest QUBO objective value
         bitstring = select_best_bitstring(counts, q_matrix)
@@ -252,11 +352,18 @@ def collect_aer_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
             "weights": weights,
             "bitstring": bitstring,
             "objective_value": obj,
-            "circuit_depth": int(transpiled.depth()),
+            "pre_transpilation_depth": pre_depth,
+            "circuit_depth": post_depth,
             "circuit_execution_us": -1.0,
+            "metadata_key_used": "n/a",
             "shots": shots,
             "solve_time_ms": float((end_time - start_time) * 1000.0),
             "convergence_info": convergence_info,
+            "backend_calibration_date": "n/a",
+            "error_mitigation_method": "none",
+            "physical_qubits": job.get("physical_qubits", list(range(num_qubits))),
+            "top_bitstring_fraction": top_fraction,
+            "signal_quality": signal_quality,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "status": "COMPLETED",
         }
@@ -273,6 +380,25 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
     with Path(job["problem_file"]).open("r", encoding="utf-8") as f:
         problem = json.load(f)
 
+    qaoa_depth = int(job.get("qaoa_depth", 1))
+    solver_name = f"qaoa_p{qaoa_depth}_{job['backend']}"
+    circuit_params = job.get("circuit_params", {})
+    pre_depth = job.get("pre_transpilation_depth", 0)
+    post_depth = job.get("circuit_depth", 0)
+    physical_qubits = job.get("physical_qubits", list(range(int(problem["num_variables"]))))
+    error_mitigation_requested = bool(circuit_params.get("error_mitigation", False))
+
+    _phase4_defaults: Dict[str, Any] = {
+        "pre_transpilation_depth": pre_depth,
+        "circuit_depth": post_depth,
+        "metadata_key_used": "unavailable",
+        "backend_calibration_date": "unavailable",
+        "error_mitigation_method": "none",
+        "physical_qubits": physical_qubits,
+        "top_bitstring_fraction": 0.0,
+        "signal_quality": "low",
+    }
+
     try:
         from qiskit_ibm_runtime import QiskitRuntimeService
 
@@ -283,9 +409,19 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
         )
         backend = service.backend(job["backend"])
         runner_job = service.job(job["job_id"])
+        print(f"  IBM job {job['job_id']} retrieved from {job['backend']}", file=sys.stderr)
     except Exception as exc:
         raise RuntimeError(f"IBM job lookup failed: {exc}")
 
+    # Retrieve calibration date
+    cal_date = "unavailable"
+    try:
+        cal_date = backend.properties().last_update_date.isoformat()
+        print(f"  Backend calibration date: {cal_date}", file=sys.stderr)
+    except Exception as exc:
+        print(f"  Warning: could not retrieve calibration date: {exc}", file=sys.stderr)
+
+    # Poll until terminal status
     start_time = time.time()
     deadline = start_time + timeout_min * 60
     status = None
@@ -297,12 +433,13 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
         except Exception:
             status = str(runner_job.status())
 
+        print(f"  Job status: {status}", file=sys.stderr)
         if status in ("DONE", "COMPLETED"):
             break
         if status in ("ERROR", "FAILED", "CANCELLED"):
             break
         time.sleep(wait)
-        wait = min(wait * 1.5, 300)  # cap at 5 minutes
+        wait = min(wait * 1.5, 300)
 
     if status is None:
         status = "TIMEOUT"
@@ -312,103 +449,163 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
             "schema_version": "1.0",
             "job_id": job["job_id"],
             "problem_id": problem["problem_id"],
-            "solver_name": f"qaoa_p{job['qaoa_depth']}_{job['backend']}",
+            "solver_name": solver_name,
             "execution_backend": job["backend"],
             "weights": [],
             "bitstring": "",
             "objective_value": 0.0,
-            "circuit_depth": 0,
             "circuit_execution_us": -1.0,
             "shots": job["shots"],
             "solve_time_ms": 0.0,
             "convergence_info": f"Job failed with status {status}",
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "status": "FAILED",
+            **_phase4_defaults,
+            "backend_calibration_date": cal_date,
         }
+
     if status == "TIMEOUT":
         return {
             "schema_version": "1.0",
             "job_id": job["job_id"],
             "problem_id": problem["problem_id"],
-            "solver_name": f"qaoa_p{job['qaoa_depth']}_{job['backend']}",
+            "solver_name": solver_name,
             "execution_backend": job["backend"],
             "weights": [],
             "bitstring": "",
             "objective_value": 0.0,
-            "circuit_depth": 0,
             "circuit_execution_us": -1.0,
             "shots": job["shots"],
             "solve_time_ms": 0.0,
             "convergence_info": "Timeout reached while polling IBM job.",
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "status": "TIMEOUT",
+            **_phase4_defaults,
+            "backend_calibration_date": cal_date,
         }
 
+    # DONE — extract counts
     try:
         result = runner_job.result()
-        counts = result.get_counts() if hasattr(result, "get_counts") else {}
-        if not counts:
-            convergence_info = "IBM job completed but no counts returned."
-            bitstring = ""
-            weights = []
-        else:
-            bitstring = select_best_bitstring(counts, problem["Q"])
-            raw_weights = decode_bitstring(
-                bitstring, int(problem["num_bits_per_asset"]), int(problem["num_assets"])
-            )
-            total_weight = sum(raw_weights)
-            weights = (
-                [w / total_weight for w in raw_weights]
-                if total_weight > 1e-9
-                else [1.0 / int(problem["num_assets"])] * int(problem["num_assets"])
-            )
-            convergence_info = f"min-energy bitstring count: {counts[bitstring]}/{job['shots']}"
-
-        execution_us = result_metadata_time_us(result)
-        circuit = build_qaoa_circuit(
-            int(problem["num_variables"]),
-            problem["Q"],
-            int(job["qaoa_depth"]),
-            float(job["circuit_params"]["gamma"]),
-            float(job["circuit_params"]["beta"]),
-        )
-        transpiled = transpile(circuit, backend)
-
-        return {
-            "schema_version": "1.0",
-            "job_id": job["job_id"],
-            "problem_id": problem["problem_id"],
-            "solver_name": f"qaoa_p{job['qaoa_depth']}_{job['backend']}",
-            "execution_backend": job["backend"],
-            "weights": weights,
-            "bitstring": bitstring,
-            "objective_value": objective_value(problem["Q"], bitstring),
-            "circuit_depth": int(transpiled.depth()),
-            "circuit_execution_us": execution_us,
-            "shots": job["shots"],
-            "solve_time_ms": float((time.time() - start_time) * 1000.0),
-            "convergence_info": convergence_info,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "status": "COMPLETED",
-        }
     except Exception as exc:
         return {
             "schema_version": "1.0",
             "job_id": job["job_id"],
             "problem_id": problem["problem_id"],
-            "solver_name": f"qaoa_p{job['qaoa_depth']}_{job['backend']}",
+            "solver_name": solver_name,
             "execution_backend": job["backend"],
             "weights": [],
             "bitstring": "",
             "objective_value": 0.0,
-            "circuit_depth": 0,
             "circuit_execution_us": -1.0,
             "shots": job["shots"],
             "solve_time_ms": 0.0,
-            "convergence_info": f"IBM collection exception: {exc}",
+            "convergence_info": f"IBM result retrieval failed: {exc}",
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "status": "FAILED",
+            **_phase4_defaults,
+            "backend_calibration_date": cal_date,
         }
+
+    # Robust counts extraction (SamplerV2 PrimitiveResult or older API)
+    counts: Dict[str, int] = {}
+    try:
+        pub_result = result[0]
+        counts = extract_counts(pub_result)
+        print(f"  Extracted {sum(counts.values())} shots from PubResult", file=sys.stderr)
+    except Exception:
+        try:
+            counts = result.get_counts() if hasattr(result, "get_counts") else {}
+        except Exception:
+            counts = {}
+        if counts:
+            print(f"  Extracted {sum(counts.values())} shots via legacy API", file=sys.stderr)
+        else:
+            print("  Warning: could not extract counts from result", file=sys.stderr)
+
+    # mthree readout error correction
+    error_mitigation_method = "none"
+    if error_mitigation_requested and counts:
+        try:
+            import mthree
+            mit = mthree.M3Mitigation(backend)
+            print(f"  Calibrating mthree for qubits {physical_qubits}...", file=sys.stderr)
+            mit.cals_from_system(physical_qubits)
+            quasi_probs = mit.apply_correction(counts, physical_qubits)
+            shots_total = job["shots"]
+            corrected = {k: max(0, int(v * shots_total)) for k, v in quasi_probs.items()}
+            # Keep only non-zero entries
+            corrected = {k: v for k, v in corrected.items() if v > 0}
+            if corrected:
+                counts = corrected
+                error_mitigation_method = "mthree"
+                print("  mthree correction applied.", file=sys.stderr)
+            else:
+                print("  Warning: mthree produced empty corrected counts; using raw.", file=sys.stderr)
+        except Exception as exc:
+            print(f"  Warning: mthree correction failed: {exc}", file=sys.stderr)
+            error_mitigation_method = "failed"
+
+    # Signal quality
+    top_fraction, signal_quality = _compute_signal_quality(counts)
+    if signal_quality == "low":
+        print(
+            f"  Warning: low signal quality (top bitstring = {top_fraction:.1%} of shots). "
+            f"Results reflect NISQ hardware noise.",
+            file=sys.stderr,
+        )
+
+    # Decode best solution
+    if counts:
+        bitstring = select_best_bitstring(counts, problem["Q"])
+        raw_weights = decode_bitstring(
+            bitstring, int(problem["num_bits_per_asset"]), int(problem["num_assets"])
+        )
+        total_weight = sum(raw_weights)
+        weights = (
+            [w / total_weight for w in raw_weights]
+            if total_weight > 1e-9
+            else [1.0 / int(problem["num_assets"])] * int(problem["num_assets"])
+        )
+        convergence_info = (
+            f"min-energy bitstring count: {counts.get(bitstring, 0)}/{job['shots']} "
+            f"signal={signal_quality} em={error_mitigation_method}"
+        )
+        obj = objective_value(problem["Q"], bitstring)
+    else:
+        bitstring = ""
+        weights = []
+        convergence_info = "IBM job completed but no counts returned."
+        obj = 0.0
+
+    # Execution timing
+    execution_us, metadata_key = extract_execution_us(result, runner_job)
+    print(f"  Execution time: {execution_us:.1f} µs (key={metadata_key})", file=sys.stderr)
+
+    return {
+        "schema_version": "1.0",
+        "job_id": job["job_id"],
+        "problem_id": problem["problem_id"],
+        "solver_name": solver_name,
+        "execution_backend": job["backend"],
+        "weights": weights,
+        "bitstring": bitstring,
+        "objective_value": obj,
+        "pre_transpilation_depth": pre_depth,
+        "circuit_depth": post_depth,
+        "circuit_execution_us": execution_us,
+        "metadata_key_used": metadata_key,
+        "shots": job["shots"],
+        "solve_time_ms": float((time.time() - start_time) * 1000.0),
+        "convergence_info": convergence_info,
+        "backend_calibration_date": cal_date,
+        "error_mitigation_method": error_mitigation_method,
+        "physical_qubits": physical_qubits,
+        "top_bitstring_fraction": top_fraction,
+        "signal_quality": signal_quality,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "status": "COMPLETED",
+    }
 
 
 def main() -> int:
