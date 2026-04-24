@@ -14,25 +14,45 @@ import matplotlib.ticker as mticker
 import pandas as pd
 from jinja2 import Template
 
-SOLVER_NAME_MAP: dict[str, str] = {
-    "markowitz": "Markowitz",
-    "sa_classical": "QUBO (Sim. Annealing)",
-    "qaoa": "QAOA",
-}
-
 SOLVER_TYPE_MAP: dict[str, str] = {
     "classical": "Classical",
     "quantum_inspired": "QUBO",
     "quantum": "Quantum (QAOA)",
 }
 
+# Per-solver color: IBM hardware gets a distinct warm red; Aer stays purple.
+SOLVER_COLOR_MAP: dict[str, str] = {
+    "classical": "#2563eb",
+    "quantum_inspired": "#d97706",
+    "quantum_aer": "#7c3aed",
+    "quantum_ibm": "#be123c",
+}
+
 
 def _display_name(solver_name: str) -> str:
     """Return a human-readable label for a solver name."""
-    for key, label in SOLVER_NAME_MAP.items():
-        if solver_name.startswith(key):
-            return label
+    if solver_name.startswith("markowitz"):
+        return "Markowitz"
+    if solver_name.startswith("sa_classical"):
+        return "QUBO (Sim. Annealing)"
+    if solver_name.startswith("qaoa"):
+        # Distinguish backend from solver name suffix
+        if "ibm_" in solver_name:
+            backend = solver_name.split("ibm_", 1)[1]
+            return f"QAOA (IBM {backend})"
+        if "aer" in solver_name:
+            return "QAOA (Aer Simulator)"
+        return "QAOA"
     return solver_name
+
+
+def _solver_color(run: Dict[str, Any]) -> str:
+    """Return the plot color for a run, distinguishing IBM hardware from Aer."""
+    backend = run.get("execution_backend", "")
+    solver_type = run.get("solver_type", "")
+    if solver_type == "quantum":
+        return SOLVER_COLOR_MAP["quantum_ibm"] if backend.startswith("ibm_") else SOLVER_COLOR_MAP["quantum_aer"]
+    return SOLVER_COLOR_MAP.get(solver_type, "#6b7280")
 
 
 def _display_type(solver_type: str) -> str:
@@ -213,14 +233,7 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
     """
     plt.figure(figsize=(12, 5))
 
-    color_map = {
-        "classical": "#2563eb",
-        "quantum_inspired": "#d97706",
-        "quantum": "#7c3aed"
-    }
-
     for run in runs:
-        solver_type = run["solver_type"]
         solver_name = run["solver_name"]
         if run.get("_hardware_only"):
             continue  # no backtest NAV — hardware notes only
@@ -239,7 +252,7 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
         if nav_values:
             first_nav = nav_values[0]
             normalized = [v / first_nav for v in nav_values]
-            plt.plot(x_axis, normalized, label=_display_name(solver_name), color=color_map.get(solver_type, "#6b7280"))
+            plt.plot(x_axis, normalized, label=_display_name(solver_name), color=_solver_color(run))
 
     plt.xlabel("Date")
     plt.ylabel("Portfolio Value (Normalized to 1.0)")
