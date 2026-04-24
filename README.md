@@ -1,6 +1,6 @@
 ﻿# Portfolio Optimizer
 
-A high-performance C++ portfolio optimization library implementing modern portfolio theory with production-grade solvers. Designed for extensibility toward quantum optimization algorithms.
+A complete C++17 portfolio optimization library combining classical mean-variance optimization with quantum and quantum-inspired solvers (QAOA, QAMO, QAMOO). Includes walk-forward backtesting, comprehensive performance analytics, and benchmark comparisons on identical problem instances.
 
 ## Features
 
@@ -32,10 +32,25 @@ A high-performance C++ portfolio optimization library implementing modern portfo
 - Integration with `BacktestResult` via `compute_analytics()` for seamless end-to-end analysis
 - Export to JSON and CSV from both standalone analytics and backtest results
 
-### Planned
+### Feature Set 5: Visualization and Reporting (Completed)
 
-- Feature Set 5: Visualization and reporting
-- Feature Set 6: Quantum optimization (classical vs quantum algorithm comparison)
+- Python report generation pipeline (`scripts/generate_report.py`)
+- Equity curve and drawdown chart visualization (matplotlib)
+- Single-file HTML report with embedded base64 PNGs
+- Metrics table rendering with Jinja2 templating
+- Docker integration with isolated Python venv for visualization dependencies
+- End-to-end test harness (`run_all_tests.sh`)
+
+### Feature Set 6: Quantum Optimization (Completed)
+
+- **Quantum Algorithms**:
+  - QAOA (Quantum Approximate Optimization Algorithm): depth-1 gate circuits with COBYLA parameter sweep
+  - QAMO (Quantum Alternating Mean-field Optimization): mean-field RX mixer with self-consistent equations
+  - QAMOO (Quantum Alternating Multi-Objective Optimization): lambda sweep for Pareto frontier generation
+- **Classical Baseline**: Simulated annealing QUBO solver for comparison
+- **Quantum Hardware Integration**: IBM Quantum Cloud (Sampler V2), Aer simulator, readout error correction (mthree)
+- **Benchmark Framework**: Side-by-side backtest comparison (BenchmarkRunner), identical data and analytics
+- **Quantum Report**: Extended benchmark visualization with 8-color solver palette and frontier comparison chart
 
 ## Architecture
 
@@ -70,6 +85,13 @@ portfolio-optimizer/
 │       ├── benchmark_analysis.hpp
 │       ├── rolling_statistics.hpp
 │       └── attribution.hpp
+│   └── quantum/                 # Quantum optimization (complete)
+│       ├── quantum_optimizer.hpp
+│       ├── qubo_formulation.hpp
+│       ├── simulated_annealing_solver.hpp
+│       ├── qiskit_solver.hpp
+│       ├── benchmark_runner.hpp
+│       └── quantum_solver_factory.hpp
 ├── src/
 │   ├── data/
 │   ├── risk/
@@ -91,6 +113,7 @@ namespace portfolio {
     namespace optimizer { }   // Portfolio optimization
     namespace backtest { }    // Backtesting engine
     namespace analytics { }   // Performance analytics
+    namespace quantum { }     // Quantum optimization
 }
 ```
 
@@ -353,18 +376,20 @@ make run_tests
 ## Code Statistics
 
 ```
-Production Code:     ~13,900 lines C++17
-Test Code:           ~5,750 lines
-Build Config:        ~350 lines (CMake, Docker)
-Documentation:       ~9,500 lines (README, guides, release notes, changelogs)
-Total:               ~29,500 lines
+Production Code:     ~18,100 lines C++17
+Test Code:           ~7,600 lines
+Python Scripts:      ~2,100 lines
+Build Config:        ~870 lines (CMake, Docker, config)
+Documentation:       ~11,600 lines (README, guides, release notes, changelogs)
+Total:               ~40,270 lines
 
 Test Coverage:
-  Unit tests:        85 tests
-  Integration tests: 52 tests
-  Convergence tests: 5 tests
-  Edge case tests:   15 tests
-  Total:             157 tests (100% passing)
+  C++ unit tests:    85 tests
+  C++ integration:   52 tests
+  C++ convergence:   5 tests
+  C++ edge cases:    15 tests
+  Python tests:      19 tests (quantum algorithms, frontier visualization)
+  Total:             176 tests (100% passing)
 ```
 
 ## Dependencies

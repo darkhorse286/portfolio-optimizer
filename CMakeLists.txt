@@ -139,6 +139,25 @@ if(ANALYTICS_SOURCES)
     endif()
 endif()
 
+# === Quantum layer (Feature Set 6) ===
+# Insert after the analytics library block.
+
+file(GLOB_RECURSE QUANTUM_SOURCES "src/quantum/*.cpp")
+if(QUANTUM_SOURCES)
+    add_library(quantum ${QUANTUM_SOURCES})
+    target_include_directories(quantum PUBLIC ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(quantum PUBLIC data risk optimizer Eigen3::Eigen)
+    if(nlohmann_json_FOUND)
+        target_link_libraries(quantum PUBLIC nlohmann_json::nlohmann_json)
+    endif()
+endif()
+
+# Add "quantum" to the existing target_link_libraries for portfolio_optimizer
+# only if the target exists — use: if(TARGET quantum)
+
+# Note: tests in tests/ are discovered and built below. Do not add
+# explicit test executables here to avoid duplicate test names.
+
 # ===================
 # Main Executable
 # ===================
@@ -155,6 +174,10 @@ target_link_libraries(portfolio_optimizer PRIVATE
     analytics
     Eigen3::Eigen
 )
+
+if(TARGET quantum)
+    target_link_libraries(portfolio_optimizer PRIVATE quantum)
+endif()
 
 if(nlohmann_json_FOUND)
     target_link_libraries(portfolio_optimizer PRIVATE nlohmann_json::nlohmann_json)
@@ -197,6 +220,9 @@ endif()
 if(TARGET analytics)
     list(APPEND TEST_LIBS analytics)
 endif()
+if(TARGET quantum)
+    list(APPEND TEST_LIBS quantum)
+endif()
 
 foreach(test_src ${TEST_SOURCES})
     get_filename_component(test_name ${test_src} NAME_WE)
@@ -207,6 +233,11 @@ foreach(test_src ${TEST_SOURCES})
     add_test(NAME ${test_name} COMMAND ${target_name})
     list(APPEND ALL_TEST_TARGETS ${target_name})
 endforeach()
+
+# Ensure Qiskit integration test runs from the repo root so Python scripts are located correctly.
+if(TARGET test_qiskit_solver_integration)
+    set_tests_properties(test_qiskit_solver_integration PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
 
 # Aggregate run_tests target
 add_custom_target(run_tests

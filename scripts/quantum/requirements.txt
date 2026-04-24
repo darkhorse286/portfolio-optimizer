@@ -1,0 +1,5 @@
+qiskit>=1.0.0
+qiskit-aer>=0.14.0
+qiskit-ibm-runtime>=0.20.0
+scipy>=1.11.0
+mthree>=2.7.0

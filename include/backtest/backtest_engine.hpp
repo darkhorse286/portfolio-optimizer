@@ -14,6 +14,7 @@
 #include "risk/risk_model_factory.hpp"
 #include "optimizer/mean_variance_optimizer.hpp"
 #include "analytics/performance_metrics.hpp"
+#include "quantum/quantum_optimizer.hpp"
 
 namespace portfolio
 {
@@ -155,6 +156,8 @@ namespace portfolio
             BacktestResult run(const MarketData &market_data);
             BacktestResult run(const MarketData &market_data,
                                optimizer::MeanVarianceOptimizer &optimizer);
+            BacktestResult run(const MarketData &market_data,
+                               quantum::QuantumOptimizer &optimizer);
 
             const BacktestParams &params() const { return params_; }
 
@@ -172,6 +175,10 @@ namespace portfolio
                                      const Eigen::MatrixXd &covariance,
                                      const Eigen::VectorXd &current_weights,
                                      optimizer::MeanVarianceOptimizer &optimizer) const;
+            Eigen::VectorXd optimize_quantum(const Eigen::VectorXd &expected_returns,
+                                             const Eigen::MatrixXd &covariance,
+                                             const Eigen::VectorXd &current_weights,
+                                             quantum::QuantumOptimizer &optimizer) const;
         };
 
     } // namespace backtest

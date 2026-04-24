@@ -3,6 +3,10 @@ build/
 cmake-build-*/
 .cmake/
 
+# Environment files
+.env
+.venv
+
 # Compiled Object files
 *.slo
 *.lo

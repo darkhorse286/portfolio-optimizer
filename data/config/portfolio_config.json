@@ -53,6 +53,26 @@
     }
   },
   
+  "ibm_quantum": {
+    "enabled": false,
+    "backend": "ibm_fez",
+    "shots": 1024,
+    "qaoa_depth": 1,
+    "timeout_minutes": 30,
+    "poll_interval_seconds": 30,
+    "error_mitigation": false,
+    "instance": "",
+    "qamo": {
+      "max_mf_iterations": 50,
+      "mf_convergence_tol": 1e-6
+    },
+    "qamoo": {
+      "n_frontier_points": 20,
+      "lambda_min": 0.1,
+      "lambda_max": 20.0
+    }
+  },
+  
   "risk_model": {
     "type": "ewma",
     "estimation_window": 252,
