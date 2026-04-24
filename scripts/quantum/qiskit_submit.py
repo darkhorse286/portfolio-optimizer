@@ -131,53 +131,79 @@ def load_problem(problem_file: Path) -> Dict[str, Any]:
     return data
 
 
-def _augment_covariance(problem_file: Path, problem: Dict[str, Any]) -> None:
-    """Add 'covariance' to problem dict (and file) if absent.
+def _ewma_covariance(returns: "np.ndarray", lam: float) -> "np.ndarray":
+    """EWMA covariance matching C++ EWMACovariance::estimate_covariance.
 
-    Loads historical prices from portfolio_config.json and computes an
-    annualised sample covariance.  Falls back to a diagonal matrix if
-    data files are not found, so QAMOO can always rebuild Q for any lambda.
+    Demeaned recursive update: Cov_t = λ·Cov_{t-1} + (1-λ)·r_t·r_t^T,
+    initialised with the outer product of the first centred return row.
+    Returns a daily covariance matrix (not annualised).
     """
-    if "covariance" in problem:
-        return
+    means = returns.mean(axis=0)
+    centered = returns - means
+    cov = np.outer(centered[0], centered[0])
+    for t in range(1, len(centered)):
+        r = centered[t]
+        cov = lam * cov + (1.0 - lam) * np.outer(r, r)
+    return 0.5 * (cov + cov.T)
 
-    repo_root = problem_file.resolve().parent.parent.parent
+
+def _augment_problem_data(problem_file: Path, problem: Dict[str, Any]) -> None:
+    """Overwrite expected_returns and covariance in problem dict and file.
+
+    Computes both fields from historical prices using the same estimators as
+    the C++ classical optimizer so that QAMOO and Markowitz frontiers are
+    directly comparable:
+      - expected_returns: simple arithmetic daily mean × 252 (annualised)
+      - covariance:       EWMA (λ=0.94) daily covariance × 252 (annualised)
+
+    Falls back to zero expected returns and a 20%-vol diagonal covariance if
+    historical prices cannot be loaded.
+    """
+    import pandas as pd
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
     config_path = repo_root / "data" / "config" / "portfolio_config.json"
     num_assets = int(problem.get("num_assets", 0))
 
     try:
-        import pandas as pd
-
         with config_path.open("r", encoding="utf-8") as f:
             cfg = json.load(f)
 
+        ewma_lambda: float = cfg.get("risk_model", {}).get("ewma_lambda", 0.94)
         prices_path = repo_root / "data" / "market" / "historical_prices.csv"
         if not prices_path.exists():
             raise FileNotFoundError(f"Prices not found: {prices_path}")
 
-        asset_names: List[str] = problem.get(
-            "asset_names", cfg.get("data", {}).get("universe", [])
-        )
+        # Resolve asset names: C++ writes placeholder "asset_0" names, so fall
+        # back to the universe from config.
+        asset_names: List[str] = cfg.get("data", {}).get("universe", [])
         prices = pd.read_csv(prices_path, index_col="date", parse_dates=True)
         cols = [c for c in asset_names if c in prices.columns]
         if len(cols) != num_assets:
             raise ValueError(
                 f"Expected {num_assets} assets in prices, found {len(cols)}"
             )
-        daily_ret = prices[cols].pct_change().dropna()
-        cov = (daily_ret.cov().values * 252).tolist()
+
+        daily_ret = prices[cols].pct_change().dropna().values
+
+        expected_returns = (daily_ret.mean(axis=0) * 252).tolist()
+        cov = (_ewma_covariance(daily_ret, ewma_lambda) * 252).tolist()
+
         print(
-            f"  Augmented problem with annualised covariance ({num_assets}x{num_assets}).",
+            f"  Augmented problem: annualised expected_returns + "
+            f"EWMA covariance (λ={ewma_lambda}) for {num_assets} assets.",
             file=sys.stderr,
         )
     except Exception as exc:
         print(
-            f"  Warning: could not compute covariance ({exc}); "
-            "using diagonal fallback.",
+            f"  Warning: could not compute market statistics ({exc}); "
+            "using zero expected_returns and diagonal covariance fallback.",
             file=sys.stderr,
         )
+        expected_returns = [0.0] * num_assets
         cov = (0.04 * np.eye(num_assets)).tolist()  # 20% vol diagonal
 
+    problem["expected_returns"] = expected_returns
     problem["covariance"] = cov
     with problem_file.open("w", encoding="utf-8") as f:
         json.dump(problem, f, indent=2)
@@ -275,9 +301,10 @@ def main() -> int:
     qaoa_depth = args.qaoa_depth
     mode = args.mode
 
-    # For QAMOO the collect step needs the raw covariance to rebuild Q per lambda
-    if mode == "qamoo":
-        _augment_covariance(problem_file, problem)
+    # For QAMO/QAMOO: overwrite expected_returns and covariance with values
+    # computed from historical prices so they match the classical optimizer.
+    if mode in ("qamo", "qamoo"):
+        _augment_problem_data(problem_file, problem)
 
     # Build initial circuit for submit-time validation / job-id generation
     if mode in ("qamo", "qamoo"):
