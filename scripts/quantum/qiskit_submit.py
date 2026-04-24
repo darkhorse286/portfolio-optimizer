@@ -11,12 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
 from qiskit import QuantumCircuit, transpile
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Submit a QAOA job for portfolio optimization."
+        description="Submit a QAOA/QAMO/QAMOO job for portfolio optimization."
     )
     parser.add_argument(
         "--problem-file",
@@ -44,6 +45,30 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="QAOA circuit depth p.",
+    )
+    parser.add_argument(
+        "--mode",
+        default="qaoa",
+        choices=["qaoa", "qamo", "qamoo"],
+        help="Algorithm mode: qaoa (default), qamo, or qamoo sweep.",
+    )
+    parser.add_argument(
+        "--n-frontier-points",
+        type=int,
+        default=20,
+        help="Number of lambda sweep points for QAMOO mode.",
+    )
+    parser.add_argument(
+        "--lambda-min",
+        type=float,
+        default=0.1,
+        help="Minimum lambda value for QAMOO sweep.",
+    )
+    parser.add_argument(
+        "--lambda-max",
+        type=float,
+        default=20.0,
+        help="Maximum lambda value for QAMOO sweep.",
     )
     parser.add_argument(
         "--list-backends",
@@ -104,6 +129,58 @@ def load_problem(problem_file: Path) -> Dict[str, Any]:
             sys.exit(1)
 
     return data
+
+
+def _augment_covariance(problem_file: Path, problem: Dict[str, Any]) -> None:
+    """Add 'covariance' to problem dict (and file) if absent.
+
+    Loads historical prices from portfolio_config.json and computes an
+    annualised sample covariance.  Falls back to a diagonal matrix if
+    data files are not found, so QAMOO can always rebuild Q for any lambda.
+    """
+    if "covariance" in problem:
+        return
+
+    repo_root = problem_file.resolve().parent.parent.parent
+    config_path = repo_root / "data" / "config" / "portfolio_config.json"
+    num_assets = int(problem.get("num_assets", 0))
+
+    try:
+        import pandas as pd
+
+        with config_path.open("r", encoding="utf-8") as f:
+            cfg = json.load(f)
+
+        prices_path = repo_root / "data" / "market" / "historical_prices.csv"
+        if not prices_path.exists():
+            raise FileNotFoundError(f"Prices not found: {prices_path}")
+
+        asset_names: List[str] = problem.get(
+            "asset_names", cfg.get("data", {}).get("universe", [])
+        )
+        prices = pd.read_csv(prices_path, index_col="date", parse_dates=True)
+        cols = [c for c in asset_names if c in prices.columns]
+        if len(cols) != num_assets:
+            raise ValueError(
+                f"Expected {num_assets} assets in prices, found {len(cols)}"
+            )
+        daily_ret = prices[cols].pct_change().dropna()
+        cov = (daily_ret.cov().values * 252).tolist()
+        print(
+            f"  Augmented problem with annualised covariance ({num_assets}x{num_assets}).",
+            file=sys.stderr,
+        )
+    except Exception as exc:
+        print(
+            f"  Warning: could not compute covariance ({exc}); "
+            "using diagonal fallback.",
+            file=sys.stderr,
+        )
+        cov = (0.04 * np.eye(num_assets)).tolist()  # 20% vol diagonal
+
+    problem["covariance"] = cov
+    with problem_file.open("w", encoding="utf-8") as f:
+        json.dump(problem, f, indent=2)
 
 
 def build_qaoa_circuit(
@@ -196,8 +273,22 @@ def main() -> int:
     backend_name = args.backend
     shots = args.shots
     qaoa_depth = args.qaoa_depth
+    mode = args.mode
 
-    circuit = build_qaoa_circuit(num_variables, q_matrix, qaoa_depth, 0.1, 0.1)
+    # For QAMOO the collect step needs the raw covariance to rebuild Q per lambda
+    if mode == "qamoo":
+        _augment_covariance(problem_file, problem)
+
+    # Build initial circuit for submit-time validation / job-id generation
+    if mode in ("qamo", "qamoo"):
+        from qiskit_solver import build_qamo_circuit
+        _mf_cfg: Dict[str, Any] = {"max_mf_iterations": 50, "mf_convergence_tol": 1e-6}
+        Q_np = np.array(q_matrix)
+        circuit, _ = build_qamo_circuit(Q_np, 0.1, 0.1,
+                                        _mf_cfg["max_mf_iterations"],
+                                        _mf_cfg["mf_convergence_tol"])
+    else:
+        circuit = build_qaoa_circuit(num_variables, q_matrix, qaoa_depth, 0.1, 0.1)
 
     pre_depth: int = 0
     circuit_depth: int = 0
@@ -278,7 +369,7 @@ def main() -> int:
         print(f"Error: unsupported backend '{backend_name}'", file=sys.stderr)
         return 1
 
-    job_entry = {
+    job_entry: Dict[str, Any] = {
         "job_id": job_id,
         "backend": backend_name,
         "problem_file": str(problem_file),
@@ -287,6 +378,7 @@ def main() -> int:
         "shots": shots,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
         "status": "QUEUED",
+        "mode": mode,
         "circuit_params": {
             "gamma": 0.1,
             "beta": 0.1,
@@ -297,6 +389,10 @@ def main() -> int:
         "circuit_depth": circuit_depth,
         "physical_qubits": physical_qubits,
     }
+    if mode == "qamoo":
+        job_entry["n_frontier_points"] = args.n_frontier_points
+        job_entry["lambda_min"] = args.lambda_min
+        job_entry["lambda_max"] = args.lambda_max
 
     append_job_entry(jobs_file, job_entry)
     print(f"Job {job_id} submitted to {backend_name}. Run --quantum-collect to retrieve results.")

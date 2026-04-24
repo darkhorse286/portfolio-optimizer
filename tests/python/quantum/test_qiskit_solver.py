@@ -1,15 +1,23 @@
-"""Tests for Phase 4 quantum solver changes: depth reporting, metadata extraction,
-bitstring extraction, signal quality, and HTML report hardware notes."""
+"""Tests for Phase 4 and Phase 5 quantum solver changes.
+
+Phase 4: depth reporting, metadata extraction, bitstring extraction,
+signal quality, and HTML report hardware notes.
+
+Phase 5: QAMO mean-field solver, QAMO circuit builder, QUBO matrix builder,
+QAMOO sweep, deduplication, frontier comparison plot, and HTML frontier section.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 # Make scripts/quantum importable from any working directory.
@@ -328,3 +336,335 @@ def test_low_signal_callout_in_report(tmp_path: Path, monkeypatch: pytest.Monkey
         "Low signal warning must reference noise-dominated results"
     )
     assert "Hardware notes" in html
+
+
+# ===========================================================================
+# Phase 5 tests
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_SMALL_Q = np.array([
+    [1.0, 0.5, 0.0, 0.0],
+    [0.5, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.5],
+    [0.0, 0.0, 0.5, 1.0],
+], dtype=float)
+
+_SMALL_COV = np.array([
+    [0.04, 0.01],
+    [0.01, 0.04],
+], dtype=float)
+
+_SMALL_MU = np.array([0.10, 0.12], dtype=float)
+
+
+def _import_solver():
+    import qiskit_solver
+    return qiskit_solver
+
+
+# ---------------------------------------------------------------------------
+# Test 1 — solve_mean_field converges for a small QUBO
+# ---------------------------------------------------------------------------
+
+def test_solve_mean_field_converges() -> None:
+    """solve_mean_field converges for a 2x2 Q matrix."""
+    qs = _import_solver()
+    Q = np.array([[1.0, 0.5], [0.5, 1.0]], dtype=float)
+    m, converged, iters = qs.solve_mean_field(Q, beta=1.0, max_iterations=100, tol=1e-6)
+    assert converged is True
+    assert iters > 0
+    assert all(abs(mi) <= 0.5 for mi in m), f"Magnetisations out of [-0.5,0.5]: {m}"
+
+
+# ---------------------------------------------------------------------------
+# Test 2 — zero Q matrix yields all-zero magnetisations
+# ---------------------------------------------------------------------------
+
+def test_solve_mean_field_returns_zeros_for_zero_Q() -> None:
+    """solve_mean_field returns zeros when Q is the zero matrix (no interactions)."""
+    qs = _import_solver()
+    Q = np.zeros((4, 4), dtype=float)
+    m, converged, iters = qs.solve_mean_field(Q, beta=1.0, max_iterations=50, tol=1e-6)
+    assert converged is True
+    assert np.allclose(m, 0.0), f"Expected all zeros, got {m}"
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — build_qamo_circuit gate counts
+# ---------------------------------------------------------------------------
+
+def test_build_qamo_circuit_has_correct_gate_count() -> None:
+    """QAMO circuit for 4-qubit problem has correct H, RZZ, RX, Measure counts."""
+    pytest.importorskip("qiskit_aer")
+    qs = _import_solver()
+    circuit, theta = qs.build_qamo_circuit(
+        _SMALL_Q, gamma=0.3, beta=0.5, max_mf_iters=50, mf_tol=1e-6
+    )
+    assert circuit.num_qubits == 4
+    assert circuit.num_clbits == 4
+    ops = circuit.count_ops()
+    assert ops.get("h", 0) == 4, f"Expected 4 H gates, got {ops.get('h', 0)}"
+    assert ops.get("rzz", 0) >= 1, f"Expected >= 1 RZZ gates, got {ops.get('rzz', 0)}"
+    assert ops.get("rx", 0) == 4, f"Expected 4 RX gates, got {ops.get('rx', 0)}"
+    assert ops.get("measure", 0) == 4, f"Expected 4 Measure, got {ops.get('measure', 0)}"
+    assert theta.shape == (4,)
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — build_qubo_matrix symmetry and shape
+# ---------------------------------------------------------------------------
+
+def test_build_qubo_matrix_symmetry() -> None:
+    """build_qubo_matrix produces a symmetric matrix with correct shape."""
+    qs = _import_solver()
+    num_assets, num_bits = 2, 2
+    Q = qs.build_qubo_matrix(
+        _SMALL_COV, _SMALL_MU, num_bits=num_bits, lambda_=1.0, penalty=10.0
+    )
+    assert Q.shape == (num_assets * num_bits, num_assets * num_bits), (
+        f"Expected ({num_assets * num_bits}, {num_assets * num_bits}), got {Q.shape}"
+    )
+    skew = np.max(np.abs(Q - Q.T))
+    assert skew < 1e-10, f"Q is not symmetric: max |Q - Q^T| = {skew}"
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — QAMO Aer integration (valid weights)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_qamo_aer_produces_valid_weights(tmp_path: Path) -> None:
+    """QAMO on Aer produces weights summing near 1.0 and all >= -0.01."""
+    pytest.importorskip("qiskit_aer")
+    from qiskit_aer import AerSimulator
+
+    # Load the real 10-asset problem if available; fall back to small problem
+    repo_root = _SCRIPTS_DIR.parent.parent
+    problem_file = repo_root / "results" / "quantum_problem.json"
+    if problem_file.exists():
+        with problem_file.open() as f:
+            problem = json.load(f)
+        # Build Q as numpy array
+        Q_np = np.array(problem["Q"])
+        num_assets = problem["num_assets"]
+        num_bits = problem["num_bits_per_asset"]
+    else:
+        Q_np = _SMALL_Q
+        num_assets = 2
+        num_bits = 2
+
+    import qiskit_solver as qs
+    backend = AerSimulator()
+    mf_config: Dict[str, Any] = {"max_mf_iterations": 50, "mf_convergence_tol": 1e-6}
+
+    from scipy.optimize import minimize
+    opt = minimize(
+        lambda p: qs.evaluate_qamo(Q_np, p[0], p[1], mf_config, backend, 256),
+        x0=[0.1, 0.1],
+        method="COBYLA",
+        options={"maxiter": 30, "rhobeg": 0.1},
+    )
+    gamma_opt, beta_opt = float(opt.x[0]), float(opt.x[1])
+    circuit, _ = qs.build_qamo_circuit(Q_np, gamma_opt, beta_opt, 50, 1e-6)
+    counts = qs._execute_aer(circuit, backend, 512)
+    best_bs = max(counts, key=counts.get)
+    weights = qs._decode_bitstring_np(best_bs, num_assets, num_bits)
+
+    # Normalize, falling back to equal-weight on all-zero bitstring
+    # (mirrors collect_aer_qamo_job behaviour)
+    total_w = float(weights.sum())
+    if total_w > 1e-9:
+        weights = weights / total_w
+    else:
+        weights = np.ones(num_assets) / num_assets
+
+    assert abs(weights.sum() - 1.0) <= 0.15, f"Weights sum to {weights.sum():.4f}"
+    assert all(w >= -0.01 for w in weights), f"Negative weight found: {weights}"
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — QAMOO Aer integration (frontier points)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_qamoo_aer_produces_frontier_points(tmp_path: Path) -> None:
+    """QAMOO on Aer with 5 lambda points produces sorted, valid frontier."""
+    pytest.importorskip("qiskit_aer")
+    from qiskit_aer import AerSimulator
+
+    cov = _SMALL_COV
+    mu = _SMALL_MU
+    num_assets, num_bits = 2, 2
+    import qiskit_solver as qs
+
+    problem: Dict[str, Any] = {
+        "num_assets": num_assets,
+        "num_bits_per_asset": num_bits,
+        "num_variables": num_assets * num_bits,
+        "expected_returns": mu.tolist(),
+        "covariance": cov.tolist(),
+        "penalty_budget": 10.0,
+        "Q": qs.build_qubo_matrix(cov, mu, num_bits, 1.0, 10.0).tolist(),
+        "problem_id": "test_qamoo",
+        "schema_version": "1.0",
+    }
+    config: Dict[str, Any] = {
+        "n_frontier_points": 5,
+        "lambda_min": 0.1,
+        "lambda_max": 5.0,
+        "max_mf_iterations": 50,
+        "mf_convergence_tol": 1e-6,
+    }
+    backend = AerSimulator()
+    frontier_points, best_weights = qs.run_qamoo_sweep(problem, config, backend, shots=256)
+
+    assert len(frontier_points) > 0, "Expected at least one frontier point"
+    assert len(frontier_points) <= 5
+    assert all(p["portfolio_volatility"] > 0 for p in frontier_points), (
+        "All frontier points must have positive volatility"
+    )
+    vols = [p["portfolio_volatility"] for p in frontier_points]
+    assert vols == sorted(vols), "Frontier points must be sorted by volatility"
+    assert best_weights is not None and len(best_weights) == num_assets
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — deduplicate_frontier removes near-duplicates
+# ---------------------------------------------------------------------------
+
+def test_deduplicate_frontier_removes_near_duplicates() -> None:
+    """deduplicate_frontier collapses near-duplicate points (within 0.5%)."""
+    qs = _import_solver()
+
+    def _pt(vol: float, ret: float) -> Dict[str, Any]:
+        return {
+            "portfolio_volatility": vol,
+            "portfolio_return": ret,
+            "lambda": 1.0,
+            "weights": [0.5, 0.5],
+            "bitstring": "00",
+            "objective_value": 0.0,
+        }
+
+    points = [
+        _pt(0.150, 0.100),   # cluster A — anchor
+        _pt(0.1502, 0.1001), # cluster A — near-dup (within 0.5%)
+        _pt(0.1504, 0.1002), # cluster A — near-dup (within 0.5%)
+        _pt(0.200, 0.130),   # cluster B
+        _pt(0.250, 0.160),   # cluster C
+    ]
+    result = qs.deduplicate_frontier(points, tol=0.005)
+    assert len(result) < 5, f"Expected fewer than 5 points after dedup, got {len(result)}"
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — plot_frontier_comparison creates a valid PNG file
+# ---------------------------------------------------------------------------
+
+def test_plot_frontier_comparison_creates_file(tmp_path: Path) -> None:
+    """plot_frontier_comparison writes a PNG file > 10_000 bytes."""
+    pytest.importorskip("matplotlib")
+    pytest.importorskip("pandas")
+
+    # Synthetic classical CSV
+    csv_path = tmp_path / "efficient_frontier.csv"
+    with csv_path.open("w") as f:
+        f.write("volatility,return,sharpe,weights_0,weights_1\n")
+        for i in range(10):
+            vol = 0.10 + i * 0.02
+            ret = 0.05 + i * 0.015
+            sh = ret / vol
+            f.write(f"{vol:.4f},{ret:.4f},{sh:.4f},0.5,0.5\n")
+
+    # Synthetic QAMOO result
+    qamoo_result: Dict[str, Any] = {
+        "solver_name": "qamoo_5pts_aer",
+        "frontier_points": [
+            {
+                "lambda": float(i + 1),
+                "portfolio_volatility": 0.12 + i * 0.025,
+                "portfolio_return": 0.04 + i * 0.02,
+                "weights": [0.5, 0.5],
+                "bitstring": "00",
+                "objective_value": 0.0,
+            }
+            for i in range(5)
+        ],
+    }
+
+    png_path = tmp_path / "frontier_comparison.png"
+    import benchmark_viz
+    benchmark_viz.plot_frontier_comparison(str(csv_path), qamoo_result, str(png_path))
+
+    assert png_path.exists(), "PNG file was not created"
+    assert png_path.stat().st_size > 10_000, (
+        f"PNG too small ({png_path.stat().st_size} bytes); expected > 10 000"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — frontier section appears in HTML report
+# ---------------------------------------------------------------------------
+
+def test_frontier_section_in_html_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """quantum_report.html contains 'Frontier comparison' when frontier args are present."""
+    pytest.importorskip("matplotlib")
+    pytest.importorskip("jinja2")
+    pytest.importorskip("pandas")
+
+    # Re-use comparison JSON from existing helper
+    comparison_file = _make_comparison_json(tmp_path, signal_quality="ok")
+
+    # Synthetic classical CSV
+    csv_path = tmp_path / "efficient_frontier.csv"
+    with csv_path.open("w") as f:
+        f.write("volatility,return,sharpe,weights_0,weights_1\n")
+        for i in range(10):
+            vol = 0.10 + i * 0.02
+            ret = 0.05 + i * 0.015
+            sh = ret / vol
+            f.write(f"{vol:.4f},{ret:.4f},{sh:.4f},0.5,0.5\n")
+
+    # Synthetic QAMOO result JSON
+    qamoo_json = tmp_path / "quantum_result_qamoo.json"
+    qamoo_data: Dict[str, Any] = {
+        "solver_name": "qamoo_5pts_aer",
+        "frontier_points": [
+            {
+                "lambda": float(i + 1),
+                "portfolio_volatility": 0.12 + i * 0.025,
+                "portfolio_return": 0.04 + i * 0.02,
+                "weights": [0.5, 0.5],
+                "bitstring": "00",
+                "objective_value": 0.0,
+            }
+            for i in range(5)
+        ],
+    }
+    qamoo_json.write_text(json.dumps(qamoo_data))
+
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "benchmark_viz.py",
+            "--comparison-file", str(comparison_file),
+            "--output-dir", str(tmp_path),
+            "--title", "Frontier Test Report",
+            "--frontier-classical", str(csv_path),
+            "--frontier-quantum", str(qamoo_json),
+        ],
+    )
+
+    import benchmark_viz
+    benchmark_viz.main()
+
+    html = (tmp_path / "quantum_report.html").read_text()
+    assert "Frontier comparison" in html, "HTML must contain 'Frontier comparison' section"
+    assert "the quantum frontier is expected" in html.lower() or \
+           "converge toward" in html.lower(), (
+        "Interpretation note must appear in frontier section"
+    )

@@ -7,25 +7,48 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import base64
+import csv
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+import numpy as np
 import pandas as pd
 from jinja2 import Template
 
 SOLVER_TYPE_MAP: dict[str, str] = {
     "classical": "Classical",
     "quantum_inspired": "QUBO",
-    "quantum": "Quantum (QAOA)",
+    "quantum": "Quantum",
 }
 
-# Per-solver color: IBM hardware gets a distinct warm red; Aer stays purple.
+# Complete color palette — one entry per (algorithm-family × backend) combination.
+# Algorithm families: markowitz, sa_classical, qaoa, qamo, qamoo
+# Backends: aer (simulator) or ibm (real hardware)
+# Classical solvers have no backend distinction so use a single key.
+#
+# Hue families:
+#   Markowitz  — blue
+#   SA/QUBO    — amber
+#   QAOA       — violet / rose
+#   QAMO       — teal
+#   QAMOO      — pink / fuchsia
 SOLVER_COLOR_MAP: dict[str, str] = {
-    "classical": "#2563eb",
-    "quantum_inspired": "#d97706",
-    "quantum_aer": "#7c3aed",
-    "quantum_ibm": "#be123c",
+    # Classical
+    "markowitz":    "#2563eb",  # blue
+    # QUBO / simulated-annealing
+    "sa_classical": "#d97706",  # amber
+    # QAOA
+    "qaoa_aer":     "#7c3aed",  # violet
+    "qaoa_ibm":     "#be123c",  # rose
+    # QAMO
+    "qamo_aer":     "#0d9488",  # teal
+    "qamo_ibm":     "#0f766e",  # dark teal
+    # QAMOO
+    "qamoo_aer":    "#db2777",  # pink
+    "qamoo_ibm":    "#9d174d",  # dark pink
 }
 
 
@@ -36,22 +59,50 @@ def _display_name(solver_name: str) -> str:
     if solver_name.startswith("sa_classical"):
         return "QUBO (Sim. Annealing)"
     if solver_name.startswith("qaoa"):
-        # Distinguish backend from solver name suffix
         if "ibm_" in solver_name:
             backend = solver_name.split("ibm_", 1)[1]
             return f"QAOA (IBM {backend})"
         if "aer" in solver_name:
             return "QAOA (Aer Simulator)"
         return "QAOA"
+    if solver_name.startswith("qamoo"):
+        if "ibm_" in solver_name:
+            backend = solver_name.split("ibm_", 1)[1]
+            return f"QAMOO (IBM {backend})"
+        return "QAMOO (Aer Simulator)"
+    if solver_name.startswith("qamo"):
+        if "ibm_" in solver_name:
+            backend = solver_name.split("ibm_", 1)[1]
+            return f"QAMO (IBM {backend})"
+        return "QAMO (Aer Simulator)"
     return solver_name
 
 
 def _solver_color(run: Dict[str, Any]) -> str:
-    """Return the plot color for a run, distinguishing IBM hardware from Aer."""
+    """Return the plot colour for a run.
+
+    Dispatches on solver_name prefix first so every known algorithm family
+    gets a unique, stable colour regardless of what solver_type is set to.
+    Falls back to solver_type only for algorithms not yet in SOLVER_COLOR_MAP.
+    """
+    solver_name = run.get("solver_name", "")
     backend = run.get("execution_backend", "")
+    suffix = "ibm" if backend.startswith("ibm_") else "aer"
+
+    # Check longest prefixes first (qamoo before qamo)
+    if solver_name.startswith("qamoo"):
+        return SOLVER_COLOR_MAP[f"qamoo_{suffix}"]
+    if solver_name.startswith("qamo"):
+        return SOLVER_COLOR_MAP[f"qamo_{suffix}"]
+    if solver_name.startswith("qaoa"):
+        return SOLVER_COLOR_MAP[f"qaoa_{suffix}"]
+    if solver_name.startswith("markowitz"):
+        return SOLVER_COLOR_MAP["markowitz"]
+    if solver_name.startswith("sa_classical"):
+        return SOLVER_COLOR_MAP["sa_classical"]
+
+    # Unknown algorithm — fall back to solver_type for forward-compatibility
     solver_type = run.get("solver_type", "")
-    if solver_type == "quantum":
-        return SOLVER_COLOR_MAP["quantum_ibm"] if backend.startswith("ibm_") else SOLVER_COLOR_MAP["quantum_aer"]
     return SOLVER_COLOR_MAP.get(solver_type, "#6b7280")
 
 
@@ -159,10 +210,11 @@ def _try_augment_runs_from_result_files(
                     if key in qr and key not in run:
                         run[key] = qr[key]
 
-        # Case 2: IBM hardware result not yet in comparison_results.json — inject it.
+        # Case 2: result not yet in comparison_results.json — inject it.
+        # Covers IBM hardware runs and any Aer QAMO/QAMOO runs added after
+        # the C++ comparison was last generated.
         # Attempt a static-weight backtest so real metrics are shown.
-        if solver_name not in existing_names and backend.startswith("ibm_") \
-                and qr.get("status") == "COMPLETED":
+        if solver_name not in existing_names and qr.get("status") == "COMPLETED":
             weights: List[float] = qr.get("weights", [])
             universe: List[str] = qr.get("universe", [])
 
@@ -222,6 +274,34 @@ def _try_augment_runs_from_result_files(
             }
             runs.append(injected)
             existing_names.add(solver_name)
+
+
+def _fill_solution_quality(runs: List[Dict[str, Any]]) -> None:
+    """Compute solution_quality_vs_classical for any run where it is 0.0.
+
+    Uses the best classical Sharpe ratio as the baseline (same denominator the
+    C++ comparison layer uses).  Mutates runs in-place; safe to call multiple
+    times.  Leaves the value as 0.0 only when there is genuinely no usable
+    classical baseline or no backtest data for the run.
+    """
+    classical_sharpe: Optional[float] = None
+    for run in runs:
+        if run.get("solver_type") == "classical" and not run.get("_hardware_only"):
+            sharpe = run.get("performance", {}).get("sharpe_ratio", 0.0)
+            if classical_sharpe is None or sharpe > classical_sharpe:
+                classical_sharpe = sharpe
+
+    if classical_sharpe is None or abs(classical_sharpe) < 1e-9:
+        return  # no usable classical baseline — leave values unchanged
+
+    for run in runs:
+        if run.get("solution_quality_vs_classical", 0.0) != 0.0:
+            continue  # already set (including the 1.0 on the Markowitz run itself)
+        if run.get("_hardware_only"):
+            continue  # no backtest data — can't compute a meaningful ratio
+        sharpe = run.get("performance", {}).get("sharpe_ratio")
+        if sharpe is not None:
+            run["solution_quality_vs_classical"] = sharpe / classical_sharpe
 
 
 def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) -> None:
@@ -285,13 +365,20 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
         is_ibm = backend.startswith("ibm_")
         is_hw_only = res.get("_hardware_only", False)
         circuit_depth_str = str(res["circuit_depth"]) if is_ibm and res.get("circuit_depth") else "-"
+        quality = res.get("solution_quality_vs_classical", 0.0)
+        if is_hw_only:
+            vs_markowitz_str = "hw only"
+        elif quality == 0.0:
+            vs_markowitz_str = "N/A"
+        else:
+            vs_markowitz_str = f"{quality:.2f}x"
         row = [
             _display_name(res["solver_name"]),
             _display_type(res["solver_type"]),
             backend,
             "hw only" if is_hw_only else f"{res['performance']['sharpe_ratio']:.3f}",
             "hw only" if is_hw_only else f"{res['performance']['total_return'] * 100:.1f}%",
-            "hw only" if is_hw_only else f"{res['solution_quality_vs_classical']:.2f}x",
+            vs_markowitz_str,
             f"{res['solve_time_ms']:.1f}ms",
             circuit_depth_str,
         ]
@@ -309,9 +396,11 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
 
     # Color vs Markowitz column (index 5)
     for i, res in enumerate(results):
-        quality = res["solution_quality_vs_classical"]
+        quality = res.get("solution_quality_vs_classical", 0.0)
         cell = table[(i + 1, 5)]
-        if quality > 0.95:
+        if quality == 0.0:
+            pass  # N/A or hw only — leave default white
+        elif quality > 0.95:
             cell.set_facecolor("#dcfce7")
         elif 0.70 <= quality <= 0.95:
             cell.set_facecolor("#fef3c7")
@@ -322,24 +411,157 @@ def plot_scaling_table(results: List[Dict[str, Any]], output_path: str) -> None:
     plt.close()
 
 
-def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
-                         comparison_png: str, scaling_png: str,
-                         output_path: str, title: str) -> None:
+def plot_frontier_comparison(
+    classical_csv: str,
+    qamoo_result: Dict[str, Any],
+    output_path: str,
+) -> None:
+    """Plot quantum vs classical Pareto frontier comparison.
+
+    Args:
+        classical_csv: Path to results/efficient_frontier.csv
+            (columns: volatility, return, sharpe, weights_*).
+        qamoo_result: Loaded from a QAMOO quantum_result JSON; must contain
+            'frontier_points' list.
+        output_path: Where to write the PNG.
+    """
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    def _pct(ax_obj, axis: str) -> None:
+        fmt = mticker.FuncFormatter(lambda x, _: f"{x * 100:.0f}%")
+        if axis == "x":
+            ax_obj.xaxis.set_major_formatter(fmt)
+        else:
+            ax_obj.yaxis.set_major_formatter(fmt)
+
+    # --- Classical frontier ---
+    classical_loaded = False
+    classical_vols: List[float] = []
+    classical_rets: List[float] = []
+    classical_sharpes: List[float] = []
+    try:
+        df = pd.read_csv(classical_csv)
+        if "volatility" in df.columns and "return" in df.columns:
+            df = df.sort_values("volatility")
+            # CSV stores raw daily values; annualize for display.
+            classical_vols = (df["volatility"] * np.sqrt(252)).tolist()
+            classical_rets = (df["return"] * 252).tolist()
+            classical_sharpes = df.get("sharpe", pd.Series(dtype=float)).tolist()
+            ax.plot(
+                classical_vols, classical_rets,
+                color="#2563eb", linewidth=2, label="Markowitz efficient frontier",
+                zorder=3,
+            )
+            if classical_vols:
+                min_idx = int(df["volatility"].idxmin())
+                ax.scatter(
+                    classical_vols[min_idx], classical_rets[min_idx],
+                    marker="v", color="#2563eb", s=100, zorder=5,
+                    label="Classical min-variance",
+                )
+            if classical_sharpes:
+                max_sh_idx = int(pd.Series(classical_sharpes).idxmax())
+                ax.scatter(
+                    classical_vols[max_sh_idx], classical_rets[max_sh_idx],
+                    marker="*", color="#2563eb", s=200, zorder=5,
+                    label="Classical max-Sharpe",
+                )
+            classical_loaded = True
+    except Exception as exc:
+        ax.annotate(
+            f"Classical frontier unavailable: {exc}",
+            xy=(0.5, 0.95), xycoords="axes fraction",
+            ha="center", fontsize=9, color="#6b7280",
+        )
+
+    # --- QAMOO frontier ---
+    # Filter out degenerate all-zero solutions (zero volatility = zero-weight bitstring).
+    frontier_points: List[Dict[str, Any]] = [
+        p for p in qamoo_result.get("frontier_points", [])
+        if p.get("portfolio_volatility", 0.0) > 1e-9
+    ]
+    qamoo_vols = [p["portfolio_volatility"] for p in frontier_points]
+    qamoo_rets = [p["portfolio_return"] for p in frontier_points]
+
+    if not frontier_points:
+        ax.annotate(
+            "QAMOO: no valid frontier points (circuit returned trivial all-zero solutions)",
+            xy=(0.5, 0.5), xycoords="axes fraction",
+            ha="center", fontsize=9, color="#6b7280",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#f3f4f6",
+                      edgecolor="#d1d5db", alpha=0.9),
+        )
+
+    if qamoo_vols:
+        ax.scatter(
+            qamoo_vols, qamoo_rets,
+            color="#7c3aed", s=60, alpha=0.8, zorder=4,
+            label="QAMOO quantum frontier",
+        )
+        # Mark max-Sharpe QAMOO point
+        rf = 0.0
+        sharpes_q = [
+            r / max(v, 1e-10) for v, r in zip(qamoo_vols, qamoo_rets)
+        ]
+        best_idx = int(max(range(len(sharpes_q)), key=lambda i: sharpes_q[i]))
+        ax.scatter(
+            qamoo_vols[best_idx], qamoo_rets[best_idx],
+            marker="*", color="#7c3aed", s=200, zorder=5,
+            label="QAMOO max-Sharpe",
+        )
+
+    # NISQ annotation when mean QAMOO volatility exceeds classical by > 10%
+    if classical_loaded and qamoo_vols and classical_vols:
+        mean_qamoo_vol = sum(qamoo_vols) / len(qamoo_vols)
+        mean_classical_vol = sum(classical_vols) / len(classical_vols)
+        if mean_classical_vol > 0 and mean_qamoo_vol > mean_classical_vol * 1.10:
+            ax.annotate(
+                "QAMOO results reflect current NISQ hardware noise at this circuit depth",
+                xy=(0.5, 0.03), xycoords="axes fraction",
+                ha="center", fontsize=9, color="#92400e",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="#fef3c7",
+                          edgecolor="#f59e0b", alpha=0.9),
+            )
+
+    ax.set_xlabel("Annualized volatility", fontsize=12)
+    ax.set_ylabel("Annualized return", fontsize=12)
+    ax.set_title("Quantum vs Classical Efficient Frontier", fontsize=13)
+    _pct(ax, "x")
+    _pct(ax, "y")
+    ax.grid(True, color="#d1d5db", alpha=0.3)
+    ax.legend(loc="upper left", fontsize=10)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def build_quantum_report(
+    metrics_by_solver: Dict[str, Dict[str, Any]],
+    comparison_png: str,
+    scaling_png: str,
+    output_path: str,
+    title: str,
+    frontier_png: Optional[str] = None,
+    frontier_classical_csv: Optional[str] = None,
+    frontier_qamoo_result: Optional[Dict[str, Any]] = None,
+) -> None:
     """Build self-contained HTML report.
 
     Args:
         metrics_by_solver: Metrics grouped by solver (may include Phase 4 fields
             such as circuit_depth, backend_calibration_date, error_mitigation_method,
             and signal_quality when augmented from quantum_result files).
-        comparison_png: Path to comparison equity curves PNG
-        scaling_png: Path to scaling table PNG
-        output_path: Path to write HTML
-        title: Report title
+        comparison_png: Path to comparison equity curves PNG.
+        scaling_png: Path to scaling table PNG.
+        output_path: Path to write HTML.
+        title: Report title.
+        frontier_png: Optional path to frontier comparison PNG.
+        frontier_classical_csv: Optional path to efficient_frontier.csv.
+        frontier_qamoo_result: Optional loaded QAMOO result dict.
     """
     def encode_png(path: str) -> str:
         try:
             with open(path, "rb") as fh:
-                import base64
                 b64 = base64.b64encode(fh.read()).decode("ascii")
                 return f"data:image/png;base64,{b64}"
         except Exception:
@@ -347,6 +569,51 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
 
     equity_data_uri = encode_png(comparison_png)
     scaling_data_uri = encode_png(scaling_png)
+    frontier_data_uri = encode_png(frontier_png) if frontier_png else ""
+
+    # Frontier comparison summary table
+    has_frontier = bool(frontier_png and frontier_data_uri)
+    frontier_summary: List[List[str]] = []
+    frontier_note = (
+        "Points above the classical frontier are not achievable with the given assets. "
+        "Points below it indicate the current cost of using quantum methods on NISQ hardware. "
+        "As hardware improves and circuit depths increase, the quantum frontier is expected "
+        "to converge toward the classical result."
+    )
+    if has_frontier and frontier_classical_csv and frontier_qamoo_result:
+        try:
+            df_cls = pd.read_csv(frontier_classical_csv)
+            if "volatility" in df_cls.columns and "return" in df_cls.columns:
+                min_vol_row = df_cls.loc[df_cls["volatility"].idxmin()]
+                max_sh_row = df_cls.loc[df_cls["sharpe"].idxmax()] if "sharpe" in df_cls.columns else min_vol_row
+                # CSV stores raw daily values; annualize for display.
+                frontier_summary.append([
+                    "Classical (Markowitz)",
+                    f"{float(min_vol_row['return']) * 252 * 100:.1f}%",
+                    f"{float(min_vol_row['volatility']) * np.sqrt(252) * 100:.1f}%",
+                    f"{float(min_vol_row.get('sharpe', 0)):.3f}",
+                    f"{float(max_sh_row['return']) * 252 * 100:.1f}%",
+                    f"{float(max_sh_row['volatility']) * np.sqrt(252) * 100:.1f}%",
+                    f"{float(max_sh_row.get('sharpe', 0)):.3f}",
+                ])
+        except Exception:
+            pass
+        fp_list: List[Dict[str, Any]] = frontier_qamoo_result.get("frontier_points", [])
+        if fp_list:
+            min_v = min(fp_list, key=lambda p: p["portfolio_volatility"])
+            best_sh = max(
+                fp_list,
+                key=lambda p: p["portfolio_return"] / max(p["portfolio_volatility"], 1e-10),
+            )
+            frontier_summary.append([
+                "QAMOO (Quantum)",
+                f"{float(min_v['portfolio_return']) * 100:.1f}%",
+                f"{float(min_v['portfolio_volatility']) * 100:.1f}%",
+                f"{float(min_v['portfolio_return']) / max(float(min_v['portfolio_volatility']), 1e-10):.3f}",
+                f"{float(best_sh['portfolio_return']) * 100:.1f}%",
+                f"{float(best_sh['portfolio_volatility']) * 100:.1f}%",
+                f"{float(best_sh['portfolio_return']) / max(float(best_sh['portfolio_volatility']), 1e-10):.3f}",
+            ])
 
     # Per-solver metrics table rows
     rows = []
@@ -563,6 +830,44 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
     </div>
     {% endif %}
 
+    {% if has_frontier %}
+    <div class="section">
+        <h2>Frontier comparison</h2>
+        <div class="chart-wrap">
+        {% if frontier_data_uri %}
+            <img alt="Frontier Comparison" src="{{ frontier_data_uri }}">
+        {% else %}
+            <p>Frontier chart not available.</p>
+        {% endif %}
+        </div>
+        {% if frontier_summary %}
+        <div class="table-wrap" style="margin-top:16px">
+        <table class="metrics">
+            <thead>
+                <tr>
+                    <th>Method</th>
+                    <th>Min-Vol Return</th>
+                    <th>Min-Vol Volatility</th>
+                    <th>Min-Vol Sharpe</th>
+                    <th>Max-Sharpe Return</th>
+                    <th>Max-Sharpe Volatility</th>
+                    <th>Max-Sharpe Ratio</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in frontier_summary %}
+                <tr>
+                    {% for cell in row %}<td>{{ cell }}</td>{% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+        <p style="margin-top:12px; font-size:13px; color:#374151;">{{ frontier_note }}</p>
+    </div>
+    {% endif %}
+
 </div>
 </body>
 </html>"""
@@ -576,6 +881,10 @@ def build_quantum_report(metrics_by_solver: Dict[str, Dict[str, Any]],
         has_ibm_runs=has_ibm_runs,
         hw_rows=hw_rows,
         has_low_signal=has_low_signal,
+        has_frontier=has_frontier,
+        frontier_data_uri=frontier_data_uri,
+        frontier_summary=frontier_summary,
+        frontier_note=frontier_note,
     )
 
     with open(output_path, "w", encoding="utf-8") as fh:
@@ -596,6 +905,18 @@ def main() -> None:
                         help="Output directory")
     parser.add_argument("--title", type=str, default="Quantum Benchmark Report",
                         help="Report title")
+    parser.add_argument(
+        "--frontier-classical",
+        type=Path,
+        default=None,
+        help="Path to efficient_frontier.csv for frontier comparison.",
+    )
+    parser.add_argument(
+        "--frontier-quantum",
+        type=Path,
+        default=None,
+        help="Path to QAMOO result JSON for frontier comparison.",
+    )
 
     args = parser.parse_args()
 
@@ -608,21 +929,59 @@ def main() -> None:
     # Augment runs with Phase 4 fields from quantum_result_*.json files
     _try_augment_runs_from_result_files(runs, args.output_dir)
 
+    # Fill any missing solution_quality_vs_classical values from Sharpe ratios
+    _fill_solution_quality(runs)
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate plots
+    # Generate comparison plots
     equity_png = args.output_dir / "comparison_equity_curves.png"
     plot_comparison_equity_curves(runs, str(equity_png))
 
     scaling_png = args.output_dir / "scaling_table.png"
     plot_scaling_table(runs, str(scaling_png))
 
+    # Resolve default paths for frontier comparison
+    classical_csv = args.frontier_classical
+    quantum_json = args.frontier_quantum
+    if classical_csv is None:
+        default_cls = args.output_dir.parent / "results" / "efficient_frontier.csv"
+        if default_cls.exists():
+            classical_csv = default_cls
+    if quantum_json is None:
+        default_q = args.output_dir / "quantum_result_latest_qamoo.json"
+        if default_q.exists():
+            quantum_json = default_q
+
+    frontier_png: Optional[str] = None
+    qamoo_result: Optional[Dict[str, Any]] = None
+    if classical_csv is not None and classical_csv.exists() \
+            and quantum_json is not None and quantum_json.exists():
+        try:
+            with quantum_json.open("r", encoding="utf-8") as fh:
+                qamoo_result = json.load(fh)
+            frontier_png_path = args.output_dir / "frontier_comparison.png"
+            plot_frontier_comparison(str(classical_csv), qamoo_result, str(frontier_png_path))
+            frontier_png = str(frontier_png_path)
+            print(f"Wrote frontier comparison chart to: {frontier_png_path}")
+        except Exception as exc:
+            print(f"Warning: frontier comparison failed: {exc}")
+
     # Group metrics by solver
     metrics_by_solver = {run["solver_name"]: run for run in runs}
 
     # Build HTML
     html_path = args.output_dir / "quantum_report.html"
-    build_quantum_report(metrics_by_solver, str(equity_png), str(scaling_png), str(html_path), args.title)
+    build_quantum_report(
+        metrics_by_solver,
+        str(equity_png),
+        str(scaling_png),
+        str(html_path),
+        args.title,
+        frontier_png=frontier_png,
+        frontier_classical_csv=str(classical_csv) if classical_csv else None,
+        frontier_qamoo_result=qamoo_result,
+    )
 
     print(f"Wrote report to: {html_path}")
 

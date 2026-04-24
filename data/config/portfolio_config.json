@@ -61,7 +61,16 @@
     "timeout_minutes": 30,
     "poll_interval_seconds": 30,
     "error_mitigation": false,
-    "instance": ""
+    "instance": "",
+    "qamo": {
+      "max_mf_iterations": 50,
+      "mf_convergence_tol": 1e-6
+    },
+    "qamoo": {
+      "n_frontier_points": 20,
+      "lambda_min": 0.1,
+      "lambda_max": 20.0
+    }
   },
   
   "risk_model": {

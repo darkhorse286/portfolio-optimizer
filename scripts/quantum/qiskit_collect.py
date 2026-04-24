@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import numpy as np
 from qiskit import QuantumCircuit, transpile
 
 
@@ -286,6 +287,12 @@ def _compute_signal_quality(counts: Dict[str, int]) -> Tuple[float, str]:
 
 
 def collect_aer_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
+    mode = job.get("mode", "qaoa")
+    if mode == "qamo":
+        return collect_aer_qamo_job(job, results_dir)
+    if mode == "qamoo":
+        return collect_aer_qamoo_job(job, results_dir)
+
     problem_file = Path(job["problem_file"])
     if not problem_file.exists():
         raise FileNotFoundError(f"Problem file not found: {problem_file}")
@@ -371,6 +378,210 @@ def collect_aer_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
         raise RuntimeError(f"Aer collection failed: {exc}")
 
 
+def collect_aer_qamo_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
+    """Collect an Aer QAMO job: optimise with COBYLA, return a single portfolio."""
+    problem_file = Path(job["problem_file"])
+    if not problem_file.exists():
+        raise FileNotFoundError(f"Problem file not found: {problem_file}")
+
+    with problem_file.open("r", encoding="utf-8") as f:
+        problem = json.load(f)
+
+    num_qubits = int(problem["num_variables"])
+    num_assets = int(problem["num_assets"])
+    num_bits_per_asset = int(problem["num_bits_per_asset"])
+    q_matrix = problem["Q"]
+    shots = int(job["shots"])
+
+    try:
+        from qiskit_aer import AerSimulator
+        from qiskit_solver import (
+            build_qamo_circuit,
+            _decode_bitstring_np,
+            _objective_np,
+            _execute_aer,
+            _optimize_qamo_params,
+            solve_mean_field,
+        )
+
+        backend_instance = AerSimulator()
+        Q_np = np.array(q_matrix)
+        mf_config: Dict[str, Any] = {"max_mf_iterations": 50, "mf_convergence_tol": 1e-6}
+
+        print(f"  Optimising QAMO parameters ({num_qubits} qubits, up to 4 restarts)...", file=sys.stderr)
+        gamma_opt, beta_opt, _opt_counts = _optimize_qamo_params(
+            Q_np, mf_config, backend_instance, min(shots, 512)
+        )
+
+        print(f"  Optimal params: gamma={gamma_opt:.4f} beta={beta_opt:.4f}", file=sys.stderr)
+
+        circuit, theta = build_qamo_circuit(
+            Q_np, gamma_opt, beta_opt,
+            mf_config["max_mf_iterations"],
+            mf_config["mf_convergence_tol"],
+        )
+        pre_depth = int(circuit.depth())
+        transpiled = transpile(circuit, backend_instance)
+        post_depth = int(transpiled.depth())
+
+        start_time = time.time()
+        counts = _execute_aer(circuit, backend_instance, shots)
+        end_time = time.time()
+
+        top_fraction, signal_quality = _compute_signal_quality(counts)
+        bitstring = select_best_bitstring(counts, q_matrix)
+        raw_weights = _decode_bitstring_np(bitstring, num_assets, num_bits_per_asset)
+        total_weight = float(raw_weights.sum())
+        if total_weight > 1e-9:
+            weights = (raw_weights / total_weight).tolist()
+        else:
+            weights = [1.0 / num_assets] * num_assets
+
+        # Mean-field diagnostics
+        m, mf_converged, mf_iters = solve_mean_field(
+            Q_np, beta_opt,
+            mf_config["max_mf_iterations"],
+            mf_config["mf_convergence_tol"],
+        )
+        import numpy as _np
+        per_qubit_angles = (2.0 * _np.arctan(m + 0.5)).tolist()
+
+        obj = _objective_np(Q_np, bitstring)
+        solver_name = f"qamo_p1_{job['backend']}"
+
+        return {
+            "schema_version": "1.0",
+            "job_id": job["job_id"],
+            "problem_id": problem["problem_id"],
+            "solver_name": solver_name,
+            "execution_backend": job["backend"],
+            "mode": "qamo",
+            "weights": weights,
+            "bitstring": bitstring,
+            "objective_value": obj,
+            "pre_transpilation_depth": pre_depth,
+            "circuit_depth": post_depth,
+            "circuit_execution_us": -1.0,
+            "metadata_key_used": "n/a",
+            "shots": shots,
+            "solve_time_ms": float((end_time - start_time) * 1000.0),
+            "convergence_info": (
+                f"gamma_opt={gamma_opt:.4f} beta_opt={beta_opt:.4f} "
+                f"obj={obj:.6f}"
+            ),
+            "backend_calibration_date": "n/a",
+            "error_mitigation_method": "none",
+            "physical_qubits": job.get("physical_qubits", list(range(num_qubits))),
+            "top_bitstring_fraction": top_fraction,
+            "signal_quality": signal_quality,
+            "mf_converged": bool(mf_converged),
+            "mf_iterations": int(mf_iters),
+            "per_qubit_angles": per_qubit_angles,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "status": "COMPLETED",
+        }
+    except Exception as exc:
+        raise RuntimeError(f"Aer QAMO collection failed: {exc}")
+
+
+def collect_aer_qamoo_job(job: Dict[str, Any], results_dir: Path) -> Dict[str, Any]:
+    """Collect an Aer QAMOO job: sweep lambdas, return Pareto frontier."""
+    problem_file = Path(job["problem_file"])
+    if not problem_file.exists():
+        raise FileNotFoundError(f"Problem file not found: {problem_file}")
+
+    with problem_file.open("r", encoding="utf-8") as f:
+        problem = json.load(f)
+
+    if "covariance" not in problem:
+        raise RuntimeError(
+            "Problem JSON is missing 'covariance' field required for QAMOO. "
+            "Re-submit with --mode qamoo to augment the problem file."
+        )
+
+    num_qubits = int(problem["num_variables"])
+    num_assets = int(problem["num_assets"])
+    shots = int(job["shots"])
+    n_pts = int(job.get("n_frontier_points", 20))
+    lambda_min = float(job.get("lambda_min", 0.1))
+    lambda_max = float(job.get("lambda_max", 20.0))
+
+    try:
+        from qiskit_aer import AerSimulator
+        from qiskit_solver import run_qamoo_sweep
+
+        backend_instance = AerSimulator()
+        qamoo_config: Dict[str, Any] = {
+            "n_frontier_points": n_pts,
+            "lambda_min": lambda_min,
+            "lambda_max": lambda_max,
+            "max_mf_iterations": 50,
+            "mf_convergence_tol": 1e-6,
+        }
+
+        lambdas = list(
+            np.logspace(np.log10(lambda_min), np.log10(lambda_max), n_pts).tolist()
+        )
+        print(
+            f"  Running QAMOO sweep: {n_pts} lambda points on {num_qubits} qubits...",
+            file=sys.stderr,
+        )
+        start_time = time.time()
+        frontier_points, best_weights = run_qamoo_sweep(
+            problem, qamoo_config, backend_instance, shots
+        )
+        end_time = time.time()
+
+        # Backward-compat: best single solution (highest Sharpe from sweep)
+        total_w = float(best_weights.sum())
+        if total_w > 1e-9:
+            best_weights_list = (best_weights / total_w).tolist()
+        else:
+            best_weights_list = [1.0 / num_assets] * num_assets
+
+        best_bitstring = (
+            frontier_points[0]["bitstring"] if frontier_points else ""
+        )
+        best_obj = frontier_points[0]["objective_value"] if frontier_points else 0.0
+
+        solver_name = f"qamoo_{n_pts}pts_{job['backend']}"
+
+        return {
+            "schema_version": "1.0",
+            "job_id": job["job_id"],
+            "problem_id": problem["problem_id"],
+            "solver_name": solver_name,
+            "execution_backend": job["backend"],
+            "mode": "qamoo",
+            "weights": best_weights_list,
+            "bitstring": best_bitstring,
+            "objective_value": best_obj,
+            "pre_transpilation_depth": job.get("pre_transpilation_depth", 0),
+            "circuit_depth": job.get("circuit_depth", 0),
+            "circuit_execution_us": -1.0,
+            "metadata_key_used": "n/a",
+            "shots": shots,
+            "solve_time_ms": float((end_time - start_time) * 1000.0),
+            "convergence_info": (
+                f"QAMOO sweep: {n_pts} points requested, "
+                f"{len(frontier_points)} returned after deduplication"
+            ),
+            "backend_calibration_date": "n/a",
+            "error_mitigation_method": "none",
+            "physical_qubits": job.get("physical_qubits", list(range(num_qubits))),
+            "top_bitstring_fraction": 0.0,
+            "signal_quality": "ok" if frontier_points else "low",
+            "frontier_points": frontier_points,
+            "n_frontier_points_requested": n_pts,
+            "n_frontier_points_returned": len(frontier_points),
+            "sweep_lambdas": lambdas,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "status": "COMPLETED",
+        }
+    except Exception as exc:
+        raise RuntimeError(f"Aer QAMOO collection failed: {exc}")
+
+
 def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -> Dict[str, Any]:
     token = os.environ.get("IBM_QUANTUM_TOKEN")
     instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
@@ -380,8 +591,15 @@ def collect_ibm_job(job: Dict[str, Any], timeout_min: int, poll_interval: int) -
     with Path(job["problem_file"]).open("r", encoding="utf-8") as f:
         problem = json.load(f)
 
+    mode = job.get("mode", "qaoa")
     qaoa_depth = int(job.get("qaoa_depth", 1))
-    solver_name = f"qaoa_p{qaoa_depth}_{job['backend']}"
+    if mode == "qamo":
+        solver_name = f"qamo_p1_{job['backend']}"
+    elif mode == "qamoo":
+        n_pts = int(job.get("n_frontier_points", 20))
+        solver_name = f"qamoo_{n_pts}pts_{job['backend']}"
+    else:
+        solver_name = f"qaoa_p{qaoa_depth}_{job['backend']}"
     circuit_params = job.get("circuit_params", {})
     pre_depth = job.get("pre_transpilation_depth", 0)
     post_depth = job.get("circuit_depth", 0)
