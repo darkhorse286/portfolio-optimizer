@@ -23,6 +23,38 @@ namespace portfolio
         {
         }
 
+        // Hardcoded sector mapping for the 10-asset universe
+        static std::unordered_map<std::string, std::string> get_sector_mapping()
+        {
+            return {
+                {"AAPL", "Technology"},
+                {"MSFT", "Technology"},
+                {"GOOGL", "Technology"},
+                {"JPM", "Financials"},
+                {"BAC", "Financials"},
+                {"JNJ", "Healthcare"},
+                {"PFE", "Healthcare"},
+                {"XOM", "Energy"},
+                {"CVX", "Energy"},
+                {"WMT", "Consumer"}
+            };
+        }
+
+        // Compute sector weights from portfolio weights
+        static std::unordered_map<std::string, double> compute_sector_weights(
+            const std::vector<std::string>& universe,
+            const Eigen::VectorXd& weights)
+        {
+            auto sector_map = get_sector_mapping();
+            std::unordered_map<std::string, double> sector_weights;
+            for (size_t i = 0; i < universe.size(); ++i)
+            {
+                std::string sector = sector_map[universe[i]];
+                sector_weights[sector] += weights[i];
+            }
+            return sector_weights;
+        }
+
         void BenchmarkRunner::add_classical_solver(
             const std::string& name,
             std::shared_ptr<portfolio::optimizer::MeanVarianceOptimizer> solver)
@@ -107,6 +139,8 @@ namespace portfolio
             std::vector<double> solve_times;
             std::vector<double> circuit_times;
             std::vector<std::vector<double>> all_nav_series;
+            std::vector<portfolio::backtest::TradeSummary> trade_summaries;
+            std::vector<Eigen::VectorXd> all_weights;
 
             for (int i = 0; i < num_runs; ++i)
             {
@@ -149,6 +183,19 @@ namespace portfolio
 
                         result.successful_runs++;
                         all_nav_series.push_back(bt_result.nav_series);
+                        trade_summaries.push_back(bt_result.trade_summary);
+
+                        // Compute average weights across snapshots
+                        Eigen::VectorXd avg_weights = Eigen::VectorXd::Zero(data_.num_assets());
+                        for (const auto& snap : bt_result.snapshots)
+                        {
+                            avg_weights += snap.weights;
+                        }
+                        if (!bt_result.snapshots.empty())
+                        {
+                            avg_weights /= bt_result.snapshots.size();
+                        }
+                        all_weights.push_back(avg_weights);
 
                         // Dates are identical across runs; keep from first successful run
                         if (result.date_series.empty())
@@ -230,6 +277,60 @@ namespace portfolio
                 result.mean_circuit_execution_us = -1.0;
                 result.mean_portfolio_return = 0.0;
                 result.mean_portfolio_volatility = 0.0;
+            }
+
+            // Aggregate trade summary across successful runs
+            if (!trade_summaries.empty())
+            {
+                portfolio::backtest::TradeSummary& agg = result.trade_summary;
+                for (const auto& ts : trade_summaries)
+                {
+                    agg.total_trades += ts.total_trades;
+                    agg.buy_trades += ts.buy_trades;
+                    agg.sell_trades += ts.sell_trades;
+                    agg.total_notional += ts.total_notional;
+                    agg.total_costs += ts.total_costs;
+                    agg.rebalance_count += ts.rebalance_count;
+                    agg.turnover += ts.turnover;
+                }
+                int n = trade_summaries.size();
+                agg.avg_cost_per_trade = agg.total_costs / std::max(1, agg.total_trades);
+                agg.total_trades /= n;
+                agg.buy_trades /= n;
+                agg.sell_trades /= n;
+                agg.total_notional /= n;
+                agg.total_costs /= n;
+                agg.rebalance_count /= n;
+                agg.turnover /= n;
+            }
+
+            // Compute average weights and sector weights
+            if (!all_weights.empty())
+            {
+                Eigen::VectorXd avg_weights = Eigen::VectorXd::Zero(data_.num_assets());
+                for (const auto& w : all_weights)
+                {
+                    avg_weights += w;
+                }
+                avg_weights /= all_weights.size();
+
+                result.sector_weights = compute_sector_weights(data_.get_tickers(), avg_weights);
+
+                // For benchmark, use equal weight across sectors (simplified)
+                // In a real implementation, this would be the benchmark's sector weights
+                std::unordered_map<std::string, double> benchmark_weights;
+                auto sector_map = get_sector_mapping();
+                std::unordered_map<std::string, int> sector_counts;
+                for (const auto& ticker : data_.get_tickers())
+                {
+                    std::string sector = sector_map[ticker];
+                    sector_counts[sector]++;
+                }
+                for (const auto& [sector, count] : sector_counts)
+                {
+                    benchmark_weights[sector] = 1.0 / sector_counts.size();  // equal weight
+                }
+                result.benchmark_sector_weights = benchmark_weights;
             }
 
             return result;
@@ -315,6 +416,17 @@ namespace portfolio
                     }
                 }
                 run["nav_series"] = nav_arr;
+
+                // Trade summary
+                const auto& ts = res.trade_summary;
+                run["trade_summary"]["rebalance_count"] = ts.rebalance_count;
+                run["trade_summary"]["turnover"] = ts.turnover;
+                run["trade_summary"]["avg_cost_per_trade"] = ts.avg_cost_per_trade;
+                run["trade_summary"]["total_costs"] = ts.total_costs;
+
+                // Sector weights
+                run["sector_weights"] = res.sector_weights;
+                run["benchmark_sector_weights"] = res.benchmark_sector_weights;
 
                 j["runs"].push_back(run);
             }

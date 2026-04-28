@@ -169,6 +169,113 @@ def _compute_static_portfolio_metrics(
     return performance, nav_series
 
 
+def _get_sector_mapping() -> Dict[str, str]:
+    return {
+        "AAPL": "Technology",
+        "MSFT": "Technology",
+        "GOOGL": "Technology",
+        "JPM": "Financials",
+        "BAC": "Financials",
+        "JNJ": "Healthcare",
+        "PFE": "Healthcare",
+        "XOM": "Energy",
+        "CVX": "Energy",
+        "WMT": "Consumer",
+    }
+
+
+def _compute_sector_allocations(
+    universe: List[str],
+    weights: List[float],
+    prices_csv: Path,
+) -> Optional[List[Dict[str, Any]]]:
+    if not universe or not weights or len(universe) != len(weights) or not prices_csv.exists():
+        return None
+
+    try:
+        prices = pd.read_csv(prices_csv, index_col="date", parse_dates=True)
+    except Exception:
+        return None
+
+    cols = [c for c in universe if c in prices.columns]
+    if not cols:
+        return None
+
+    p = prices[cols].dropna()
+    if len(p) < 2:
+        return None
+
+    mapping = _get_sector_mapping()
+    sector_weights: dict[str, float] = {}
+    sector_returns: dict[str, float] = {}
+    sector_asset_weights: dict[str, list[tuple[str, float]]] = {}
+
+    for ticker, weight in zip(universe, weights):
+        sector = mapping.get(ticker)
+        if sector is None:
+            continue
+        sector_weights[sector] = sector_weights.get(sector, 0.0) + weight
+        sector_asset_weights.setdefault(sector, []).append((ticker, weight))
+
+    if not sector_weights:
+        return None
+
+    # Use total return per asset over the available history window.
+    asset_returns: dict[str, float] = {}
+    for ticker in cols:
+        first = float(p[ticker].iloc[0])
+        last = float(p[ticker].iloc[-1])
+        asset_returns[ticker] = (last / first - 1.0) if first > 0 else 0.0
+
+    allocations: List[Dict[str, Any]] = []
+    total_weight = sum(weights)
+    if total_weight <= 0.0:
+        total_weight = 1.0
+
+    for sector, sector_w in sector_weights.items():
+        asset_list = sector_asset_weights.get(sector, [])
+        sector_ret = 0.0
+        if sector_w > 0 and asset_list:
+            for ticker, w in asset_list:
+                asset_return = asset_returns.get(ticker, 0.0)
+                sector_ret += asset_return * (w / sector_w)
+        allocations.append({
+            "sector_name": sector,
+            "weight": sector_w / total_weight,
+            "return_value": sector_ret,
+        })
+
+    return allocations
+
+
+def _compute_benchmark_sector_allocations(
+    universe: List[str],
+    prices_csv: Path,
+) -> Optional[List[Dict[str, Any]]]:
+    if not universe or not prices_csv.exists():
+        return None
+
+    allocations = _compute_sector_allocations(universe, [1.0 / len(universe)] * len(universe), prices_csv)
+    if allocations is None:
+        return None
+
+    # Re-weight sectors equally for the benchmark comparison.
+    sector_list = [alloc["sector_name"] for alloc in allocations]
+    sector_set = sorted(set(sector_list))
+    if not sector_set:
+        return None
+
+    sector_return_map = {alloc["sector_name"]: alloc["return_value"] for alloc in allocations}
+    return [
+        {
+            "sector_name": sector,
+            "weight": 1.0 / len(sector_set),
+            "return_value": sector_return_map.get(sector, 0.0),
+        }
+        for sector in sector_set
+    ]
+
+
 def _try_augment_runs_from_result_files(
     runs: List[Dict[str, Any]], results_dir: Path
 ) -> None:
@@ -238,6 +345,19 @@ def _try_augment_runs_from_result_files(
                     weights, universe, prices_csv, risk_free_rate
                 )
 
+            sector_allocations = None
+            benchmark_sector_allocations = None
+            trade_summary = None
+            if weights and universe and prices_csv.exists():
+                sector_allocations = _compute_sector_allocations(universe, weights, prices_csv)
+                benchmark_sector_allocations = _compute_benchmark_sector_allocations(universe, prices_csv)
+                trade_summary = {
+                    "rebalance_count": None,
+                    "turnover": None,
+                    "avg_cost_per_trade": None,
+                    "total_costs": None,
+                }
+
             if static_result is not None:
                 perf, nav_series = static_result
                 has_full_backtest = True
@@ -272,6 +392,13 @@ def _try_augment_runs_from_result_files(
                 "metadata_key_used": qr.get("metadata_key_used", "unavailable"),
                 "_hardware_only": not has_full_backtest,
             }
+            if trade_summary is not None:
+                injected["trade_summary"] = trade_summary
+            if sector_allocations is not None:
+                injected["sector_weights"] = sector_allocations
+            if benchmark_sector_allocations is not None:
+                injected["benchmark_sector_weights"] = benchmark_sector_allocations
+
             runs.append(injected)
             existing_names.add(solver_name)
 
@@ -510,18 +637,13 @@ def plot_frontier_comparison(
             label="QAMOO max-Sharpe",
         )
 
-    # NISQ annotation when mean QAMOO volatility exceeds classical by > 10%
+    # Determine whether the NISQ disclaimer should be shown
+    show_nisq = False
     if classical_loaded and qamoo_vols and classical_vols:
         mean_qamoo_vol = sum(qamoo_vols) / len(qamoo_vols)
         mean_classical_vol = sum(classical_vols) / len(classical_vols)
         if mean_classical_vol > 0 and mean_qamoo_vol > mean_classical_vol * 1.10:
-            ax.annotate(
-                "QAMOO results reflect current NISQ hardware noise at this circuit depth",
-                xy=(0.5, 0.03), xycoords="axes fraction",
-                ha="center", fontsize=9, color="#92400e",
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="#fef3c7",
-                          edgecolor="#f59e0b", alpha=0.9),
-            )
+            show_nisq = True
 
     ax.set_xlabel("Annualized volatility", fontsize=12)
     ax.set_ylabel("Annualized return", fontsize=12)
@@ -529,10 +651,170 @@ def plot_frontier_comparison(
     _pct(ax, "x")
     _pct(ax, "y")
     ax.grid(True, color="#d1d5db", alpha=0.3)
-    ax.legend(loc="upper left", fontsize=10)
+    legend = ax.legend(loc="upper left", fontsize=10)
     plt.tight_layout()
+
+    # Place NISQ disclaimer just below the legend box
+    if show_nisq:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        leg_bb = legend.get_window_extent(renderer=renderer)
+        ax_inv = ax.transAxes.inverted()
+        x_left = ax_inv.transform((leg_bb.x0, leg_bb.y0))[0]
+        y_below = ax_inv.transform((leg_bb.x0, leg_bb.y0 - 6))[1]
+        ax.annotate(
+            "NISQ: results reflect current hardware noise at this circuit depth",
+            xy=(x_left, y_below), xycoords="axes fraction",
+            ha="left", va="top", fontsize=9, color="#92400e",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#fef3c7",
+                      edgecolor="#f59e0b", alpha=0.9),
+        )
+
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
+
+
+def _parse_sector_allocations(sectors: Any) -> Optional[List[Dict[str, Any]]]:
+    """Parse a sector allocation structure from run metadata."""
+    if not sectors or not isinstance(sectors, list):
+        return None
+    parsed: List[Dict[str, Any]] = []
+    for item in sectors:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("sector_name") or item.get("sector") or item.get("name")
+        weight = item.get("weight")
+        ret = item.get("return_value")
+        if name is None or weight is None or ret is None:
+            continue
+        try:
+            parsed.append({
+                "sector_name": str(name),
+                "weight": float(weight),
+                "return_value": float(ret),
+            })
+        except (TypeError, ValueError):
+            continue
+    return parsed if parsed else None
+
+
+def _compute_brinson_fachler(
+    portfolio_sectors: List[Dict[str, Any]],
+    benchmark_sectors: List[Dict[str, Any]],
+) -> Optional[Dict[str, float]]:
+    """Compute Brinson-Fachler single-period allocation, selection, interaction."""
+    if not portfolio_sectors or not benchmark_sectors:
+        return None
+
+    bench_map = {s["sector_name"]: s for s in benchmark_sectors}
+    for sector in portfolio_sectors:
+        if sector["sector_name"] not in bench_map:
+            return None
+
+    total_bench_return = sum(s["weight"] * s["return_value"] for s in benchmark_sectors)
+    total_port_return = sum(s["weight"] * s["return_value"] for s in portfolio_sectors)
+
+    allocation = 0.0
+    selection = 0.0
+    interaction = 0.0
+    for port_sector in portfolio_sectors:
+        bench_sector = bench_map[port_sector["sector_name"]]
+        w_p = port_sector["weight"]
+        w_b = bench_sector["weight"]
+        r_p = port_sector["return_value"]
+        r_b = bench_sector["return_value"]
+
+        allocation += (w_p - w_b) * (r_b - total_bench_return)
+        selection += w_b * (r_p - r_b)
+        interaction += (w_p - w_b) * (r_p - r_b)
+
+    total_active = allocation + selection + interaction
+    return {
+        "allocation": allocation,
+        "selection": selection,
+        "interaction": interaction,
+        "total_active": total_active,
+        "portfolio_return": total_port_return,
+        "benchmark_return": total_bench_return,
+    }
+
+
+def _augment_cpp_sector_data(runs: List[Dict[str, Any]]) -> None:
+    """Convert dict-format sector_weights from C++ JSON runs to list format with return values.
+
+    The C++ benchmark serializes sector_weights as {"Technology": 0.4, ...}.
+    _parse_sector_allocations expects [{sector_name, weight, return_value}, ...].
+    Reads historical prices to fill in per-sector returns. Mutates runs in-place.
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    prices_csv = repo_root / "data" / "market" / "historical_prices.csv"
+
+    sector_map = _get_sector_mapping()
+    sector_tickers: dict[str, list[str]] = {}
+    for ticker, sector in sector_map.items():
+        sector_tickers.setdefault(sector, []).append(ticker)
+
+    sector_returns: dict[str, float] = {s: 0.0 for s in sector_tickers}
+    if prices_csv.exists():
+        try:
+            prices = pd.read_csv(prices_csv, index_col="date", parse_dates=True)
+            for sector, tickers in sector_tickers.items():
+                cols = [t for t in tickers if t in prices.columns]
+                if not cols:
+                    continue
+                p = prices[cols].dropna()
+                if len(p) < 2:
+                    continue
+                rets = []
+                for ticker in cols:
+                    first = float(p[ticker].iloc[0])
+                    last = float(p[ticker].iloc[-1])
+                    if first > 0:
+                        rets.append(last / first - 1.0)
+                if rets:
+                    sector_returns[sector] = sum(rets) / len(rets)
+        except Exception:
+            pass
+
+    for run in runs:
+        sw = run.get("sector_weights")
+        bsw = run.get("benchmark_sector_weights")
+
+        if isinstance(sw, dict) and sw:
+            total_w = sum(sw.values()) or 1.0
+            run["sector_weights"] = [
+                {
+                    "sector_name": sector,
+                    "weight": weight / total_w,
+                    "return_value": sector_returns.get(sector, 0.0),
+                }
+                for sector, weight in sw.items()
+            ]
+
+        if isinstance(bsw, dict) and bsw:
+            total_bw = sum(bsw.values()) or 1.0
+            run["benchmark_sector_weights"] = [
+                {
+                    "sector_name": sector,
+                    "weight": weight / total_bw,
+                    "return_value": sector_returns.get(sector, 0.0),
+                }
+                for sector, weight in bsw.items()
+            ]
+
+
+def _format_percentage(value: Any, precision: int = 2) -> str:
+    try:
+        return f"{float(value) * 100:.{precision}f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _format_currency(value: Any) -> str:
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "n/a"
 
 
 def build_quantum_report(
@@ -617,17 +899,104 @@ def build_quantum_report(
 
     # Per-solver metrics table rows
     rows = []
+    activity_rows = []
+    attribution_rows = []
+    turnover_warnings = []
+
     for solver, metrics in metrics_by_solver.items():
         perf = metrics.get("performance", {})
+        solver_name = _display_name(solver)
+        backend = metrics.get("execution_backend", "")
+
         rows.append([
-            _display_name(solver),
+            solver_name,
             _display_type(metrics.get("solver_type", "")),
-            metrics.get("execution_backend", ""),
+            backend,
             f"{perf.get('sharpe_ratio', 0):.3f}",
             f"{perf.get('total_return', 0) * 100:.1f}%",
             f"{perf.get('annualized_volatility', 0) * 100:.1f}%",
             f"{perf.get('max_drawdown', 0) * 100:.1f}%"
         ])
+
+        trade_summary = metrics.get("trade_summary", {}) or {}
+        rebalance_count = trade_summary.get("rebalance_count")
+        turnover = trade_summary.get("turnover")
+        avg_cost = trade_summary.get("avg_cost_per_trade")
+        total_costs = trade_summary.get("total_costs")
+
+        is_ibm = backend.startswith("ibm_")
+        _hw_na = (
+            '<span title="Single hardware submission — re-running the circuit at each '
+            'rebalancing date is not feasible at current queue constraints.">'
+            'n/a — single hardware submission, not walk-forward</span>'
+        )
+
+        warning_row = isinstance(turnover, (int, float)) and turnover > 1.0
+        if warning_row:
+            turnover_warnings.append(solver_name)
+
+        if is_ibm:
+            activity_rows.append([
+                solver_name,
+                backend,
+                _hw_na, _hw_na, _hw_na, _hw_na,
+                False,
+            ])
+        else:
+            activity_rows.append([
+                solver_name,
+                backend,
+                str(rebalance_count) if rebalance_count is not None else "n/a",
+                _format_percentage(turnover, precision=1) if turnover is not None else "n/a",
+                _format_currency(avg_cost),
+                _format_currency(total_costs),
+                warning_row,
+            ])
+
+        portfolio_sectors = _parse_sector_allocations(metrics.get("sector_weights"))
+        benchmark_sectors = _parse_sector_allocations(metrics.get("benchmark_sector_weights"))
+        attribution = None
+        if not is_ibm and portfolio_sectors is not None and benchmark_sectors is not None:
+            attribution = _compute_brinson_fachler(portfolio_sectors, benchmark_sectors)
+
+        if is_ibm:
+            attribution_rows.append([
+                solver_name,
+                backend,
+                _hw_na, _hw_na, _hw_na, _hw_na,
+            ])
+        elif attribution is None:
+            attribution_rows.append([
+                solver_name,
+                backend,
+                '<span title="Attribution unavailable — weights may be outside feasible region.">n/a</span>',
+                '<span title="Attribution unavailable — weights may be outside feasible region.">n/a</span>',
+                '<span title="Attribution unavailable — weights may be outside feasible region.">n/a</span>',
+                '<span title="Attribution unavailable — weights may be outside feasible region.">n/a</span>',
+            ])
+        else:
+            attribution_rows.append([
+                solver_name,
+                backend,
+                _format_percentage(attribution["allocation"], precision=2),
+                _format_percentage(attribution["selection"], precision=2),
+                _format_percentage(attribution["interaction"], precision=2),
+                _format_percentage(attribution["total_active"], precision=2),
+            ])
+
+    turnover_warning_note = None
+    if turnover_warnings:
+        if len(turnover_warnings) == 1:
+            turnover_warning_note = (
+                f"Warning: turnover exceeded 100% for {turnover_warnings[0]}. "
+                "This may indicate the constraint violation path was triggered."
+            )
+        else:
+            solver_list = ", ".join(turnover_warnings)
+            turnover_warning_note = (
+                f"Warning: turnover exceeded 100% for {solver_list}. "
+                "This may indicate the constraint violation path was triggered."
+            )
 
     # Hardware notes: collect IBM runs that have Phase 4 metadata
     ibm_runs = [
@@ -729,6 +1098,12 @@ def build_quantum_report(
             white-space: nowrap;
         }
         table.metrics tbody tr:hover { background: #f8fafc; }
+        .warning-row td { background: #fef3c7; }
+        .footnote {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #4b5563;
+        }
     </style>
 </head>
 <body>
@@ -796,6 +1171,72 @@ def build_quantum_report(
             </tbody>
         </table>
         </div>
+    </div>
+
+    <div class="section">
+        <h2>Transaction Activity</h2>
+        {% if turnover_warning_note %}
+        <div class="callout">
+            <strong>Warning:</strong> {{ turnover_warning_note }}
+        </div>
+        {% endif %}
+        <div class="table-wrap">
+        <table class="metrics">
+            <thead>
+                <tr>
+                    <th>Solver</th>
+                    <th>Backend</th>
+                    <th>Rebalance Events</th>
+                    <th>Total Turnover</th>
+                    <th>Avg Cost Per Trade</th>
+                    <th>Total Transaction Costs</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in activity_rows %}
+                <tr{% if row[6] %} class="warning-row"{% endif %}>
+                    <td>{{ row[0] }}</td>
+                    <td>{{ row[1] }}</td>
+                    <td>{{ row[2] | safe }}</td>
+                    <td>{{ row[3] | safe }}</td>
+                    <td>{{ row[4] | safe }}</td>
+                    <td>{{ row[5] | safe }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Performance Attribution (Brinson-Fachler)</h2>
+        <div class="table-wrap">
+        <table class="metrics">
+            <thead>
+                <tr>
+                    <th>Solver</th>
+                    <th>Backend</th>
+                    <th>Allocation Effect</th>
+                    <th>Selection Effect</th>
+                    <th>Interaction Effect</th>
+                    <th>Total Active Return</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in attribution_rows %}
+                <tr>
+                    <td>{{ row[0] }}</td>
+                    <td>{{ row[1] }}</td>
+                    <td>{{ row[2] | safe }}</td>
+                    <td>{{ row[3] | safe }}</td>
+                    <td>{{ row[4] | safe }}</td>
+                    <td>{{ row[5] | safe }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <p class="footnote">Single-period decomposition. Multi-period Carino linking available via export_analytics_json().</p>
     </div>
 
     {% if has_ibm_runs %}
@@ -876,6 +1317,9 @@ def build_quantum_report(
     html = tmpl.render(
         title=title,
         rows=rows,
+        activity_rows=activity_rows,
+        attribution_rows=attribution_rows,
+        turnover_warning_note=turnover_warning_note,
         equity_data_uri=equity_data_uri,
         scaling_data_uri=scaling_data_uri,
         has_ibm_runs=has_ibm_runs,
@@ -928,6 +1372,9 @@ def main() -> None:
 
     # Augment runs with Phase 4 fields from quantum_result_*.json files
     _try_augment_runs_from_result_files(runs, args.output_dir)
+
+    # Convert C++ dict-format sector_weights to list format with return values
+    _augment_cpp_sector_data(runs)
 
     # Fill any missing solution_quality_vs_classical values from Sharpe ratios
     _fill_solution_quality(runs)

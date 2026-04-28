@@ -42,6 +42,9 @@ namespace portfolio
             int successful_runs;
             std::vector<double> nav_series;
             std::vector<std::string> date_series;
+            portfolio::backtest::TradeSummary trade_summary;
+            std::unordered_map<std::string, double> sector_weights;
+            std::unordered_map<std::string, double> benchmark_sector_weights;
         };
 
         /**

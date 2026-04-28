@@ -92,7 +92,8 @@ namespace portfolio
                 " --jobs-file " + quote(config_.jobs_file) +
                 " --backend " + quote(config_.backend) +
                 " --shots " + std::to_string(config_.shots) +
-                " --qaoa-depth " + std::to_string(config_.qaoa_depth);
+                " --qaoa-depth " + std::to_string(config_.qaoa_depth) +
+                " --mode " + config_.algorithm_mode;
             int rc = std::system(submit_cmd.c_str());
             if (rc != 0)
             {
@@ -153,7 +154,7 @@ namespace portfolio
 
         std::string QiskitSolver::solver_name() const
         {
-            return "qaoa_p" + std::to_string(config_.qaoa_depth) + "_" + config_.backend;
+            return config_.algorithm_mode + "_p" + std::to_string(config_.qaoa_depth) + "_" + config_.backend;
         }
 
         std::string QiskitSolver::execution_backend() const
