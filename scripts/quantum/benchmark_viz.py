@@ -637,18 +637,13 @@ def plot_frontier_comparison(
             label="QAMOO max-Sharpe",
         )
 
-    # NISQ annotation when mean QAMOO volatility exceeds classical by > 10%
+    # Determine whether the NISQ disclaimer should be shown
+    show_nisq = False
     if classical_loaded and qamoo_vols and classical_vols:
         mean_qamoo_vol = sum(qamoo_vols) / len(qamoo_vols)
         mean_classical_vol = sum(classical_vols) / len(classical_vols)
         if mean_classical_vol > 0 and mean_qamoo_vol > mean_classical_vol * 1.10:
-            ax.annotate(
-                "QAMOO results reflect current NISQ hardware noise at this circuit depth",
-                xy=(0.5, 0.03), xycoords="axes fraction",
-                ha="center", fontsize=9, color="#92400e",
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="#fef3c7",
-                          edgecolor="#f59e0b", alpha=0.9),
-            )
+            show_nisq = True
 
     ax.set_xlabel("Annualized volatility", fontsize=12)
     ax.set_ylabel("Annualized return", fontsize=12)
@@ -656,8 +651,25 @@ def plot_frontier_comparison(
     _pct(ax, "x")
     _pct(ax, "y")
     ax.grid(True, color="#d1d5db", alpha=0.3)
-    ax.legend(loc="upper left", fontsize=10)
+    legend = ax.legend(loc="upper left", fontsize=10)
     plt.tight_layout()
+
+    # Place NISQ disclaimer just below the legend box
+    if show_nisq:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        leg_bb = legend.get_window_extent(renderer=renderer)
+        ax_inv = ax.transAxes.inverted()
+        x_left = ax_inv.transform((leg_bb.x0, leg_bb.y0))[0]
+        y_below = ax_inv.transform((leg_bb.x0, leg_bb.y0 - 6))[1]
+        ax.annotate(
+            "NISQ: results reflect current hardware noise at this circuit depth",
+            xy=(x_left, y_below), xycoords="axes fraction",
+            ha="left", va="top", fontsize=9, color="#92400e",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#fef3c7",
+                      edgecolor="#f59e0b", alpha=0.9),
+        )
+
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
@@ -912,27 +924,48 @@ def build_quantum_report(
         avg_cost = trade_summary.get("avg_cost_per_trade")
         total_costs = trade_summary.get("total_costs")
 
+        is_ibm = backend.startswith("ibm_")
+        _hw_na = (
+            '<span title="Single hardware submission — re-running the circuit at each '
+            'rebalancing date is not feasible at current queue constraints.">'
+            'n/a — single hardware submission, not walk-forward</span>'
+        )
+
         warning_row = isinstance(turnover, (int, float)) and turnover > 1.0
         if warning_row:
             turnover_warnings.append(solver_name)
 
-        activity_rows.append([
-            solver_name,
-            backend,
-            str(rebalance_count) if rebalance_count is not None else "n/a",
-            _format_percentage(turnover, precision=1) if turnover is not None else "n/a",
-            _format_currency(avg_cost),
-            _format_currency(total_costs),
-            warning_row,
-        ])
+        if is_ibm:
+            activity_rows.append([
+                solver_name,
+                backend,
+                _hw_na, _hw_na, _hw_na, _hw_na,
+                False,
+            ])
+        else:
+            activity_rows.append([
+                solver_name,
+                backend,
+                str(rebalance_count) if rebalance_count is not None else "n/a",
+                _format_percentage(turnover, precision=1) if turnover is not None else "n/a",
+                _format_currency(avg_cost),
+                _format_currency(total_costs),
+                warning_row,
+            ])
 
         portfolio_sectors = _parse_sector_allocations(metrics.get("sector_weights"))
         benchmark_sectors = _parse_sector_allocations(metrics.get("benchmark_sector_weights"))
         attribution = None
-        if portfolio_sectors is not None and benchmark_sectors is not None:
+        if not is_ibm and portfolio_sectors is not None and benchmark_sectors is not None:
             attribution = _compute_brinson_fachler(portfolio_sectors, benchmark_sectors)
 
-        if attribution is None:
+        if is_ibm:
+            attribution_rows.append([
+                solver_name,
+                backend,
+                _hw_na, _hw_na, _hw_na, _hw_na,
+            ])
+        elif attribution is None:
             attribution_rows.append([
                 solver_name,
                 backend,
@@ -1164,10 +1197,10 @@ def build_quantum_report(
                 <tr{% if row[6] %} class="warning-row"{% endif %}>
                     <td>{{ row[0] }}</td>
                     <td>{{ row[1] }}</td>
-                    <td>{{ row[2] }}</td>
-                    <td>{{ row[3] }}</td>
-                    <td>{{ row[4] }}</td>
-                    <td>{{ row[5] }}</td>
+                    <td>{{ row[2] | safe }}</td>
+                    <td>{{ row[3] | safe }}</td>
+                    <td>{{ row[4] | safe }}</td>
+                    <td>{{ row[5] | safe }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

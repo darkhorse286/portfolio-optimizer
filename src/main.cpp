@@ -36,7 +36,7 @@ void print_usage(const char *program_name)
               << "  --config PATH         Path to configuration JSON file (required)\n"
               << "  --output PATH         Path to output directory (default: results/)\n"
               << "  --frontier            Compute efficient frontier\n"
-              << "  --benchmark           Run quantum benchmark (MV + SA + Aer QAOA)\n"
+              << "  --benchmark           Run quantum benchmark (MV + SA + Aer QAOA + Aer QAMO)\n"
               << "  --verbose             Enable verbose logging\n"
               << "  --help, -h            Show this help message\n"
               << "\nExample:\n"
@@ -340,7 +340,7 @@ static void run_benchmark_viz(const std::string &output_dir)
 }
 
 /**
- * @brief Run the three-way quantum benchmark (MV + SA + Aer QAOA) and generate the report.
+ * @brief Run the four-way quantum benchmark (MV + SA + Aer QAOA + Aer QAMO) and generate the report.
  *
  * @param config      Loaded portfolio configuration.
  * @param data        Market data already loaded and filtered.
@@ -389,16 +389,29 @@ static void run_benchmark(
     {
         // num_bits_per_asset=2 keeps the circuit at 10×2=20 qubits (16 MB statevector).
         // The default of 4 bits produces 40 qubits (16 TB), which is not simulable locally.
-        portfolio::quantum::QiskitSolverConfig qiskit_cfg;
-        qiskit_cfg.backend      = "aer_simulator";
-        qiskit_cfg.qaoa_depth   = 1;
-        qiskit_cfg.shots        = 1024;
-        qiskit_cfg.problem_file = output_dir + "/quantum_problem.json";
-        qiskit_cfg.jobs_file    = output_dir + "/quantum_jobs.json";
-        qiskit_cfg.results_dir  = output_dir;
-        qiskit_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qiskit_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qiskit_cfg);
+        portfolio::quantum::QiskitSolverConfig qaoa_cfg;
+        qaoa_cfg.backend         = "aer_simulator";
+        qaoa_cfg.algorithm_mode  = "qaoa";
+        qaoa_cfg.qaoa_depth      = 1;
+        qaoa_cfg.shots           = 1024;
+        qaoa_cfg.problem_file    = output_dir + "/quantum_problem.json";
+        qaoa_cfg.jobs_file       = output_dir + "/quantum_jobs.json";
+        qaoa_cfg.results_dir     = output_dir;
+        qaoa_cfg.params["num_bits_per_asset"] = 2.0;
+        auto qiskit_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_cfg);
         runner.add_quantum_solver("qaoa_p1_aer_simulator", "quantum", qiskit_solver);
+
+        portfolio::quantum::QiskitSolverConfig qamo_cfg;
+        qamo_cfg.backend         = "aer_simulator";
+        qamo_cfg.algorithm_mode  = "qamo";
+        qamo_cfg.qaoa_depth      = 1;
+        qamo_cfg.shots           = 1024;
+        qamo_cfg.problem_file    = output_dir + "/quantum_problem.json";
+        qamo_cfg.jobs_file       = output_dir + "/quantum_jobs.json";
+        qamo_cfg.results_dir     = output_dir;
+        qamo_cfg.params["num_bits_per_asset"] = 2.0;
+        auto qamo_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_cfg);
+        runner.add_quantum_solver("qamo_p1_aer_simulator", "quantum", qamo_solver);
     }
 
     std::cout << "Running benchmark...\n";

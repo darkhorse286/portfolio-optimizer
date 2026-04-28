@@ -24,6 +24,7 @@ namespace portfolio
         struct QiskitSolverConfig
         {
             std::string backend = "aer_simulator";
+            std::string algorithm_mode = "qaoa";  // "qaoa" | "qamo"
             int qaoa_depth = 1;
             int shots = 1024;
             std::string problem_file = "results/quantum_problem.json";
