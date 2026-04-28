@@ -93,7 +93,8 @@ namespace portfolio
                 " --backend " + quote(config_.backend) +
                 " --shots " + std::to_string(config_.shots) +
                 " --qaoa-depth " + std::to_string(config_.qaoa_depth) +
-                " --mode " + config_.algorithm_mode;
+                " --mode " + config_.algorithm_mode +
+                (config_.augment_problem_data ? " --augment-problem-data" : "");
             int rc = std::system(submit_cmd.c_str());
             if (rc != 0)
             {

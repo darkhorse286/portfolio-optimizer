@@ -31,6 +31,10 @@ namespace portfolio
             std::string jobs_file = "results/quantum_jobs.json";
             std::string results_dir = "results";
             int timeout_minutes = 30;
+            bool augment_problem_data = false;  // If true, overwrites expected_returns and covariance
+                                              // in the problem file with values computed from
+                                              // historical prices before circuit submission.
+                                              // Enables informed quantum optimization.
             std::map<std::string, double> params;
 
             /**

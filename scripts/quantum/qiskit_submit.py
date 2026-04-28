@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         help="Maximum lambda value for QAMOO sweep.",
     )
     parser.add_argument(
+        "--augment-problem-data",
+        action="store_true",
+        help="Overwrite expected_returns and covariance in the problem file with "
+             "values computed from historical prices before circuit submission.",
+    )
+    parser.add_argument(
         "--list-backends",
         action="store_true",
         help="Authenticate with IBM, print available backends with qubit counts and queue depths, then exit 0.",
@@ -301,9 +307,7 @@ def main() -> int:
     qaoa_depth = args.qaoa_depth
     mode = args.mode
 
-    # For QAMO/QAMOO: overwrite expected_returns and covariance with values
-    # computed from historical prices so they match the classical optimizer.
-    if mode in ("qamo", "qamoo"):
+    if args.augment_problem_data:
         _augment_problem_data(problem_file, problem)
 
     # Build initial circuit for submit-time validation / job-id generation
