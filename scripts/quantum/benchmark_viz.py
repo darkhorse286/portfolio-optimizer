@@ -779,6 +779,38 @@ def _augment_cpp_sector_data(runs: List[Dict[str, Any]]) -> None:
     for run in runs:
         sw = run.get("sector_weights")
         bsw = run.get("benchmark_sector_weights")
+        avg_weights = run.get("avg_weights", [])
+        tickers = run.get("tickers", [])
+
+        # Compute per-solver portfolio sector returns using actual asset weights
+        portfolio_sector_returns: dict[str, float] = {}
+        portfolio_sector_weights_within: dict[str, list[tuple[str, float]]] = {}
+
+        if avg_weights and tickers and len(avg_weights) == len(tickers) and prices_csv.exists():
+            try:
+                prices = pd.read_csv(prices_csv, index_col="date", parse_dates=True)
+                asset_returns: dict[str, float] = {}
+                for ticker in tickers:
+                    if ticker in prices.columns:
+                        col = prices[ticker].dropna()
+                        if len(col) >= 2:
+                            asset_returns[ticker] = (col.iloc[-1] / col.iloc[0]) - 1.0
+
+                for ticker, weight in zip(tickers, avg_weights):
+                    sector = sector_map.get(ticker)
+                    if sector is None:
+                        continue
+                    portfolio_sector_weights_within.setdefault(sector, []).append((ticker, weight))
+
+                for sector, asset_list in portfolio_sector_weights_within.items():
+                    total_sector_w = sum(w for _, w in asset_list)
+                    if total_sector_w > 0:
+                        portfolio_sector_returns[sector] = sum(
+                            asset_returns.get(t, 0.0) * (w / total_sector_w)
+                            for t, w in asset_list
+                        )
+            except Exception:
+                pass
 
         if isinstance(sw, dict) and sw:
             total_w = sum(sw.values()) or 1.0
@@ -786,7 +818,7 @@ def _augment_cpp_sector_data(runs: List[Dict[str, Any]]) -> None:
                 {
                     "sector_name": sector,
                     "weight": weight / total_w,
-                    "return_value": sector_returns.get(sector, 0.0),
+                    "return_value": portfolio_sector_returns.get(sector, sector_returns.get(sector, 0.0)),
                 }
                 for sector, weight in sw.items()
             ]
@@ -797,7 +829,7 @@ def _augment_cpp_sector_data(runs: List[Dict[str, Any]]) -> None:
                 {
                     "sector_name": sector,
                     "weight": weight / total_bw,
-                    "return_value": sector_returns.get(sector, 0.0),
+                    "return_value": sector_returns.get(sector, 0.0),  # benchmark stays equal-weighted
                 }
                 for sector, weight in bsw.items()
             ]
