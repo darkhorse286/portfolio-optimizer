@@ -356,7 +356,8 @@ static void run_benchmark(
     // Remove stale jobs file so this run starts with a clean slate.
     // Without this, every previous failed/successful job accumulates in the file
     // and collect re-processes them all on each rebalancing period.
-    std::filesystem::remove(output_dir + "/quantum_jobs.json");
+    std::filesystem::remove(output_dir + "/quantum_jobs_qaoa.json");
+    std::filesystem::remove(output_dir + "/quantum_jobs_qamo.json");
 
     auto backtest_params = portfolio::backtest::BacktestParams::from_config(config);
 
@@ -394,8 +395,8 @@ static void run_benchmark(
         qaoa_cfg.algorithm_mode  = "qaoa";
         qaoa_cfg.qaoa_depth      = 1;
         qaoa_cfg.shots           = 1024;
-        qaoa_cfg.problem_file    = output_dir + "/quantum_problem.json";
-        qaoa_cfg.jobs_file       = output_dir + "/quantum_jobs.json";
+        qaoa_cfg.problem_file    = output_dir + "/quantum_problem_qaoa.json";
+        qaoa_cfg.jobs_file       = output_dir + "/quantum_jobs_qaoa.json";
         qaoa_cfg.results_dir     = output_dir;
         qaoa_cfg.params["num_bits_per_asset"] = 2.0;
         auto qiskit_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_cfg);
@@ -406,8 +407,8 @@ static void run_benchmark(
         qamo_cfg.algorithm_mode  = "qamo";
         qamo_cfg.qaoa_depth      = 1;
         qamo_cfg.shots           = 1024;
-        qamo_cfg.problem_file    = output_dir + "/quantum_problem.json";
-        qamo_cfg.jobs_file       = output_dir + "/quantum_jobs.json";
+        qamo_cfg.problem_file    = output_dir + "/quantum_problem_qamo.json";
+        qamo_cfg.jobs_file       = output_dir + "/quantum_jobs_qamo.json";
         qamo_cfg.results_dir     = output_dir;
         qamo_cfg.params["num_bits_per_asset"] = 2.0;
         auto qamo_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_cfg);
