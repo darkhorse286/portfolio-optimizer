@@ -52,6 +52,24 @@ SOLVER_COLOR_MAP: dict[str, str] = {
 }
 
 
+# Walk-forward solver names registered in main.cpp.
+# Used to suppress stale single-submission Aer result files.
+WALK_FORWARD_SOLVER_NAMES: set[str] = {
+    "QAOA Uninformed (Aer)",
+    "QAOA Informed (Aer)",
+    "QAMO Uninformed (Aer)",
+    "QAMO Informed (Aer)",
+}
+
+# Legacy single-submission solver names written by older main.cpp builds.
+# These are superseded by the walk-forward variants above and must not be
+# injected into the report even when found in quantum_result_*.json files.
+_LEGACY_AER_SOLVER_NAMES: set[str] = {
+    "qaoa_p1_aer_simulator",
+    "qamo_p1_aer_simulator",
+}
+
+
 def _display_name(solver_name: str) -> str:
     """Return a human-readable label for a solver name."""
     if solver_name.startswith("markowitz"):
@@ -89,16 +107,20 @@ def _solver_color(run: Dict[str, Any]) -> str:
     backend = run.get("execution_backend", "")
     suffix = "ibm" if backend.startswith("ibm_") else "aer"
 
-    # Check longest prefixes first (qamoo before qamo)
-    if solver_name.startswith("qamoo"):
+    # Case-insensitive prefix check so both legacy snake_case names (e.g.
+    # qaoa_p1_aer_simulator) and the new human-readable names (e.g.
+    # "QAOA Uninformed (Aer)") resolve to the same colour family.
+    # Check longest prefixes first (qamoo before qamo).
+    solver_lower = solver_name.lower()
+    if solver_lower.startswith("qamoo"):
         return SOLVER_COLOR_MAP[f"qamoo_{suffix}"]
-    if solver_name.startswith("qamo"):
+    if solver_lower.startswith("qamo"):
         return SOLVER_COLOR_MAP[f"qamo_{suffix}"]
-    if solver_name.startswith("qaoa"):
+    if solver_lower.startswith("qaoa"):
         return SOLVER_COLOR_MAP[f"qaoa_{suffix}"]
-    if solver_name.startswith("markowitz"):
+    if solver_lower.startswith("markowitz"):
         return SOLVER_COLOR_MAP["markowitz"]
-    if solver_name.startswith("sa_classical"):
+    if solver_lower.startswith("sa_classical"):
         return SOLVER_COLOR_MAP["sa_classical"]
 
     # Unknown algorithm — fall back to solver_type for forward-compatibility
@@ -321,6 +343,10 @@ def _try_augment_runs_from_result_files(
         # Covers IBM hardware runs and any Aer QAMO/QAMOO runs added after
         # the C++ comparison was last generated.
         # Attempt a static-weight backtest so real metrics are shown.
+        if solver_name in _LEGACY_AER_SOLVER_NAMES:
+            continue  # superseded by walk-forward variants — skip legacy file
+        if solver_name in WALK_FORWARD_SOLVER_NAMES:
+            continue  # walk-forward result already present in comparison_results.json
         if solver_name not in existing_names and qr.get("status") == "COMPLETED":
             weights: List[float] = qr.get("weights", [])
             universe: List[str] = qr.get("universe", [])
@@ -935,10 +961,25 @@ def build_quantum_report(
     attribution_rows = []
     turnover_warnings = []
 
+    _INFORMED_TIP = (
+        "Informed: problem file augmented with EWMA expected_returns and covariance "
+        "computed from historical prices before circuit submission."
+    )
+    _UNINFORMED_TIP = (
+        "Uninformed: raw QUBO Q matrix only, no market data augmentation."
+    )
+
     for solver, metrics in metrics_by_solver.items():
         perf = metrics.get("performance", {})
         solver_name = _display_name(solver)
         backend = metrics.get("execution_backend", "")
+
+        # Wrap informed/uninformed names with a tooltip so the distinction is
+        # visible on hover without cluttering the table column.
+        if "Informed" in solver_name and "Uninformed" not in solver_name:
+            solver_name = f'<span title="{_INFORMED_TIP}">{solver_name}</span>'
+        elif "Uninformed" in solver_name:
+            solver_name = f'<span title="{_UNINFORMED_TIP}">{solver_name}</span>'
 
         rows.append([
             solver_name,
@@ -1191,7 +1232,7 @@ def build_quantum_report(
             <tbody>
                 {% for row in rows %}
                 <tr>
-                    <td>{{ row[0] }}</td>
+                    <td>{{ row[0] | safe }}</td>
                     <td>{{ row[1] }}</td>
                     <td>{{ row[2] }}</td>
                     <td>{{ row[3] }}</td>
@@ -1227,7 +1268,7 @@ def build_quantum_report(
             <tbody>
                 {% for row in activity_rows %}
                 <tr{% if row[6] %} class="warning-row"{% endif %}>
-                    <td>{{ row[0] }}</td>
+                    <td>{{ row[0] | safe }}</td>
                     <td>{{ row[1] }}</td>
                     <td>{{ row[2] | safe }}</td>
                     <td>{{ row[3] | safe }}</td>
@@ -1257,7 +1298,7 @@ def build_quantum_report(
             <tbody>
                 {% for row in attribution_rows %}
                 <tr>
-                    <td>{{ row[0] }}</td>
+                    <td>{{ row[0] | safe }}</td>
                     <td>{{ row[1] }}</td>
                     <td>{{ row[2] | safe }}</td>
                     <td>{{ row[3] | safe }}</td>

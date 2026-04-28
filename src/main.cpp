@@ -405,7 +405,7 @@ static void run_benchmark(
         qaoa_cfg.results_dir           = output_dir;
         qaoa_cfg.params["num_bits_per_asset"] = 2.0;
         auto qaoa_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_cfg);
-        runner.add_quantum_solver("qaoa_uninformed_aer", "quantum", qaoa_solver);
+        runner.add_quantum_solver("QAOA Uninformed (Aer)", "quantum", qaoa_solver);
 
         // QAOA informed — augmented with EWMA expected_returns and covariance
         portfolio::quantum::QiskitSolverConfig qaoa_informed_cfg;
@@ -419,7 +419,7 @@ static void run_benchmark(
         qaoa_informed_cfg.results_dir          = output_dir;
         qaoa_informed_cfg.params["num_bits_per_asset"] = 2.0;
         auto qaoa_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_informed_cfg);
-        runner.add_quantum_solver("qaoa_informed_aer", "quantum", qaoa_informed_solver);
+        runner.add_quantum_solver("QAOA Informed (Aer)", "quantum", qaoa_informed_solver);
 
         // QAMO uninformed
         portfolio::quantum::QiskitSolverConfig qamo_cfg;
@@ -433,7 +433,7 @@ static void run_benchmark(
         qamo_cfg.results_dir           = output_dir;
         qamo_cfg.params["num_bits_per_asset"] = 2.0;
         auto qamo_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_cfg);
-        runner.add_quantum_solver("qamo_uninformed_aer", "quantum", qamo_solver);
+        runner.add_quantum_solver("QAMO Uninformed (Aer)", "quantum", qamo_solver);
 
         // QAMO informed — current production behavior
         portfolio::quantum::QiskitSolverConfig qamo_informed_cfg;
@@ -447,7 +447,7 @@ static void run_benchmark(
         qamo_informed_cfg.results_dir          = output_dir;
         qamo_informed_cfg.params["num_bits_per_asset"] = 2.0;
         auto qamo_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_informed_cfg);
-        runner.add_quantum_solver("qamo_informed_aer", "quantum", qamo_informed_solver);
+        runner.add_quantum_solver("QAMO Informed (Aer)", "quantum", qamo_informed_solver);
     }
 
     std::cout << "Running benchmark...\n";
