@@ -21,7 +21,10 @@
 #include <iomanip>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 using namespace portfolio;
 
@@ -456,8 +459,21 @@ static void run_benchmark(
     result.print_summary();
 
     std::string comparison_path = output_dir + "/comparison_results.json";
-    result.export_comparison_json(comparison_path);
+    std::string json_output = result.to_json();
+    {
+        std::ofstream out(comparison_path);
+        out << json_output;
+    }
     std::cout << "Comparison results written to: " << comparison_path << "\n";
+
+    auto now = std::time(nullptr);
+    std::ostringstream ts;
+    ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
+    std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
+    std::ofstream ts_out(timestamped);
+    ts_out << json_output;
+    ts_out.close();
+    std::cout << "Run archived to " << timestamped << "\n";
 
     run_benchmark_viz(output_dir);
 }

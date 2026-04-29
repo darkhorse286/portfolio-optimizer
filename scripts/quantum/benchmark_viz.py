@@ -11,12 +11,24 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import base64
 import csv
+import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from jinja2 import Template
+
+# Import aggregation helpers from the sibling script without requiring a package.
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from benchmark_aggregate import (
+        discover_files, load_runs, aggregate_solver,
+        normalize_name, build_md_table,
+    )
+    _HAS_AGGREGATE = True
+except ImportError:
+    _HAS_AGGREGATE = False
 
 SOLVER_TYPE_MAP: dict[str, str] = {
     "classical": "Classical",
@@ -313,6 +325,11 @@ def _try_augment_runs_from_result_files(
     result_files = list(results_dir.glob("quantum_result_*.json"))
     existing_names = {run.get("solver_name") for run in runs}
 
+    # Case 2 deduplication: track best (most-recent) candidate per solver_name.
+    # submitted_at is often absent; filename (lexicographic order) serves as proxy.
+    case2_candidates: Dict[str, Dict[str, Any]] = {}
+    case2_sort_keys: Dict[str, str] = {}
+
     for result_file in result_files:
         try:
             with result_file.open("r", encoding="utf-8") as f:
@@ -339,94 +356,100 @@ def _try_augment_runs_from_result_files(
                     if key in qr and key not in run:
                         run[key] = qr[key]
 
-        # Case 2: result not yet in comparison_results.json — inject it.
-        # Covers IBM hardware runs and any Aer QAMO/QAMOO runs added after
-        # the C++ comparison was last generated.
-        # Attempt a static-weight backtest so real metrics are shown.
-        if solver_name in _LEGACY_AER_SOLVER_NAMES:
-            continue  # superseded by walk-forward variants — skip legacy file
-        if solver_name in WALK_FORWARD_SOLVER_NAMES:
-            continue  # walk-forward result already present in comparison_results.json
-        if solver_name not in existing_names and qr.get("status") == "COMPLETED":
-            weights: List[float] = qr.get("weights", [])
-            universe: List[str] = qr.get("universe", [])
+        # Accumulate Case 2 candidates — skip legacy/walk-forward names and
+        # solvers already present in comparison_results.json.
+        if (solver_name
+                and solver_name not in _LEGACY_AER_SOLVER_NAMES
+                and solver_name not in WALK_FORWARD_SOLVER_NAMES
+                and solver_name not in existing_names
+                and qr.get("status") == "COMPLETED"):
+            sort_key = qr.get("submitted_at") or result_file.name
+            if sort_key > case2_sort_keys.get(solver_name, ""):
+                case2_candidates[solver_name] = qr
+                case2_sort_keys[solver_name] = sort_key
 
-            # Resolve market data relative to this script's repo root
-            repo_root = Path(__file__).resolve().parent.parent.parent
-            config_path = repo_root / "data" / "config" / "portfolio_config.json"
-            prices_csv = repo_root / "data" / "market" / "historical_prices.csv"
-            risk_free_rate = 0.02
-            if config_path.exists():
-                try:
-                    cfg = json.loads(config_path.read_text())
-                    risk_free_rate = cfg.get("performance", {}).get("risk_free_rate", 0.02)
-                    if not universe:
-                        universe = cfg.get("data", {}).get("universe", [])
-                except Exception:
-                    pass
+    # Case 2: inject one entry per new solver_name using the most-recent file.
+    for solver_name, qr in case2_candidates.items():
+        backend = qr.get("execution_backend", "")
+        weights: List[float] = qr.get("weights", [])
+        universe: List[str] = qr.get("universe", [])
 
-            static_result = None
-            if weights and universe and prices_csv.exists():
-                static_result = _compute_static_portfolio_metrics(
-                    weights, universe, prices_csv, risk_free_rate
-                )
+        # Resolve market data relative to this script's repo root
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        config_path = repo_root / "data" / "config" / "portfolio_config.json"
+        prices_csv = repo_root / "data" / "market" / "historical_prices.csv"
+        risk_free_rate = 0.02
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text())
+                risk_free_rate = cfg.get("performance", {}).get("risk_free_rate", 0.02)
+                if not universe:
+                    universe = cfg.get("data", {}).get("universe", [])
+            except Exception:
+                pass
 
-            sector_allocations = None
-            benchmark_sector_allocations = None
-            trade_summary = None
-            if weights and universe and prices_csv.exists():
-                sector_allocations = _compute_sector_allocations(universe, weights, prices_csv)
-                benchmark_sector_allocations = _compute_benchmark_sector_allocations(universe, prices_csv)
-                trade_summary = {
-                    "rebalance_count": None,
-                    "turnover": None,
-                    "avg_cost_per_trade": None,
-                    "total_costs": None,
-                }
+        static_result = None
+        if weights and universe and prices_csv.exists():
+            static_result = _compute_static_portfolio_metrics(
+                weights, universe, prices_csv, risk_free_rate
+            )
 
-            if static_result is not None:
-                perf, nav_series = static_result
-                has_full_backtest = True
-            else:
-                perf = {
-                    "sharpe_ratio": 0.0,
-                    "total_return": 0.0,
-                    "annualized_return": 0.0,
-                    "annualized_volatility": 0.0,
-                    "max_drawdown": 0.0,
-                }
-                nav_series = []
-                has_full_backtest = False
-
-            injected: Dict[str, Any] = {
-                "solver_name": solver_name,
-                "solver_type": "quantum",
-                "execution_backend": backend,
-                "problem_size": qr.get("problem_size", 0),
-                "performance": perf,
-                "solve_time_ms": qr.get("solve_time_ms", 0.0),
-                "circuit_execution_us": qr.get("circuit_execution_us", -1.0),
-                "solution_quality_vs_classical": 0.0,
-                "nav_series": nav_series,
-                # Phase 4 hardware metadata
-                "circuit_depth": qr.get("circuit_depth", 0),
-                "pre_transpilation_depth": qr.get("pre_transpilation_depth", 0),
-                "backend_calibration_date": qr.get("backend_calibration_date", "unavailable"),
-                "error_mitigation_method": qr.get("error_mitigation_method", "none"),
-                "signal_quality": qr.get("signal_quality", "low"),
-                "top_bitstring_fraction": qr.get("top_bitstring_fraction", 0.0),
-                "metadata_key_used": qr.get("metadata_key_used", "unavailable"),
-                "_hardware_only": not has_full_backtest,
+        sector_allocations = None
+        benchmark_sector_allocations = None
+        trade_summary = None
+        if weights and universe and prices_csv.exists():
+            sector_allocations = _compute_sector_allocations(universe, weights, prices_csv)
+            benchmark_sector_allocations = _compute_benchmark_sector_allocations(universe, prices_csv)
+            trade_summary = {
+                "rebalance_count": None,
+                "turnover": None,
+                "avg_cost_per_trade": None,
+                "total_costs": None,
             }
-            if trade_summary is not None:
-                injected["trade_summary"] = trade_summary
-            if sector_allocations is not None:
-                injected["sector_weights"] = sector_allocations
-            if benchmark_sector_allocations is not None:
-                injected["benchmark_sector_weights"] = benchmark_sector_allocations
 
-            runs.append(injected)
-            existing_names.add(solver_name)
+        if static_result is not None:
+            perf, nav_series = static_result
+            has_full_backtest = True
+        else:
+            perf = {
+                "sharpe_ratio": 0.0,
+                "total_return": 0.0,
+                "annualized_return": 0.0,
+                "annualized_volatility": 0.0,
+                "max_drawdown": 0.0,
+            }
+            nav_series = []
+            has_full_backtest = False
+
+        injected: Dict[str, Any] = {
+            "solver_name": solver_name,
+            "solver_type": "quantum",
+            "execution_backend": backend,
+            "problem_size": qr.get("problem_size", 0),
+            "performance": perf,
+            "solve_time_ms": qr.get("solve_time_ms", 0.0),
+            "circuit_execution_us": qr.get("circuit_execution_us", -1.0),
+            "solution_quality_vs_classical": 0.0,
+            "nav_series": nav_series,
+            # Phase 4 hardware metadata
+            "circuit_depth": qr.get("circuit_depth", 0),
+            "pre_transpilation_depth": qr.get("pre_transpilation_depth", 0),
+            "backend_calibration_date": qr.get("backend_calibration_date", "unavailable"),
+            "error_mitigation_method": qr.get("error_mitigation_method", "none"),
+            "signal_quality": qr.get("signal_quality", "low"),
+            "top_bitstring_fraction": qr.get("top_bitstring_fraction", 0.0),
+            "metadata_key_used": qr.get("metadata_key_used", "unavailable"),
+            "_hardware_only": not has_full_backtest,
+        }
+        if trade_summary is not None:
+            injected["trade_summary"] = trade_summary
+        if sector_allocations is not None:
+            injected["sector_weights"] = sector_allocations
+        if benchmark_sector_allocations is not None:
+            injected["benchmark_sector_weights"] = benchmark_sector_allocations
+
+        runs.append(injected)
+        existing_names.add(solver_name)
 
 
 def _fill_solution_quality(runs: List[Dict[str, Any]]) -> None:
@@ -875,6 +898,134 @@ def _format_currency(value: Any) -> str:
         return "n/a"
 
 
+def _build_agg_rows(results_dir: Path) -> List[Dict[str, Any]]:
+    """Return per-solver aggregate stats for the HTML report section.
+
+    Source 1: timestamped comparison_results_[0-9]*.json archives (walk-forward Aer).
+    Source 2: quantum_result_*.json files (IBM hardware, QAMOO Aer) — metrics are
+              computed via static-weight backtest because these files carry weights
+              only, with no embedded performance stats.
+
+    Also writes aggregated_benchmark.json and aggregated_benchmark.md to results_dir
+    as a side effect so running benchmark_viz.py is the only command needed.
+
+    Returns an empty list when no data is available or the aggregate module
+    could not be imported, so the section is simply omitted.
+    """
+    if not _HAS_AGGREGATE:
+        return []
+
+    # --- Part 1: walk-forward results from timestamped archives ---
+    files = discover_files(results_dir)
+    by_solver: Dict[str, List[Dict[str, Any]]] = load_runs(files) if files else {}
+    # Snapshot names from archives so Part 2 can skip them without also
+    # blocking accumulation of multiple files for the same IBM solver.
+    archive_solvers: set[str] = set(by_solver.keys())
+
+    # --- Part 2: IBM hardware and QAMOO Aer from quantum_result_*.json ---
+    # Each file is one submission. Accumulate all files per solver so σ reflects
+    # genuine run-to-run variance. Metrics are computed via static-weight backtest.
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    config_path = repo_root / "data" / "config" / "portfolio_config.json"
+    prices_csv  = repo_root / "data" / "market" / "historical_prices.csv"
+    risk_free_rate = 0.02
+    config_universe: List[str] = []
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            risk_free_rate  = cfg.get("performance", {}).get("risk_free_rate", 0.02)
+            config_universe = cfg.get("data", {}).get("universe", [])
+        except Exception:
+            pass
+
+    for qr_file in sorted(results_dir.glob("quantum_result_*.json")):
+        try:
+            qr = json.loads(qr_file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        raw_name = qr.get("solver_name", "")
+        if not raw_name:
+            continue
+        if raw_name in _LEGACY_AER_SOLVER_NAMES:
+            continue
+        if raw_name in WALK_FORWARD_SOLVER_NAMES:
+            continue
+        if qr.get("status") != "COMPLETED":
+            continue
+
+        solver_name = normalize_name(raw_name)
+        if solver_name in archive_solvers:
+            continue  # already covered by walk-forward archives
+
+        weights  = qr.get("weights", [])
+        universe = qr.get("universe") or config_universe
+        if not weights or not universe or not prices_csv.exists():
+            continue
+
+        result = _compute_static_portfolio_metrics(weights, universe, prices_csv, risk_free_rate)
+        if result is None:
+            continue
+        perf, _ = result
+
+        by_solver.setdefault(solver_name, []).append({
+            "sharpe_ratio":          perf.get("sharpe_ratio"),
+            "total_return":          perf.get("total_return"),
+            "annualized_volatility": perf.get("annualized_volatility"),
+            "max_drawdown":          perf.get("max_drawdown"),
+            "turnover":              None,
+            "solve_time_ms":         qr.get("solve_time_ms"),
+            "solver_type":           "quantum",
+            "execution_backend":     qr.get("execution_backend", ""),
+        })
+
+    if not by_solver:
+        return []
+
+    stats: Dict[str, Dict[str, Any]] = {
+        name: aggregate_solver(entries)
+        for name, entries in sorted(by_solver.items())
+    }
+
+    # Write side-effect output files so this is the only command needed.
+    try:
+        (results_dir / "aggregated_benchmark.json").write_text(
+            json.dumps({"num_files": len(files), "solvers": stats}, indent=2),
+            encoding="utf-8",
+        )
+        (results_dir / "aggregated_benchmark.md").write_text(
+            build_md_table(stats) + "\n", encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"Warning: could not write aggregate output files: {exc}")
+
+    def _f(v: float, p: int = 3) -> str:
+        return f"{v:.{p}f}"
+
+    rows = []
+    for solver_name, agg in stats.items():
+        sharpe   = agg["sharpe"]
+        ret      = agg["total_return"]
+        turnover = agg["turnover"]
+
+        high_var = sharpe["high_variance"] or ret["high_variance"] or turnover["high_variance"]
+        variance_cell = "⚠ high" if high_var else "ok"
+
+        rows.append({
+            "solver":      solver_name,
+            "num_runs":    agg["num_runs"],
+            "sharpe_mean": _f(sharpe["mean"]),
+            "sharpe_std":  _f(sharpe["std"]),
+            "return_mean": _f(ret["mean"], 4),
+            "return_std":  _f(ret["std"],  4),
+            "turn_mean":   _f(turnover["mean"]) if turnover["n"] > 0 else "n/a",
+            "turn_std":    _f(turnover["std"])  if turnover["n"] > 0 else "n/a",
+            "variance":    variance_cell,
+            "high_var":    high_var,
+        })
+    return rows
+
+
 def build_quantum_report(
     metrics_by_solver: Dict[str, Dict[str, Any]],
     comparison_png: str,
@@ -884,6 +1035,7 @@ def build_quantum_report(
     frontier_png: Optional[str] = None,
     frontier_classical_csv: Optional[str] = None,
     frontier_qamoo_result: Optional[Dict[str, Any]] = None,
+    agg_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Build self-contained HTML report.
 
@@ -1093,6 +1245,8 @@ def build_quantum_report(
             metrics.get("error_mitigation_method", "N/A"),
             "ok" if sq == "ok" else ("low — results may be noise-dominated" if sq == "low" else sq or "N/A"),
         ])
+
+    has_agg = bool(agg_rows)
 
     template_str = """<!doctype html>
 <html lang="en">
@@ -1382,6 +1536,45 @@ def build_quantum_report(
     </div>
     {% endif %}
 
+    {% if has_agg %}
+    <div class="section">
+        <h2>Aggregate Statistics (across {{ agg_rows|length }} solver × run combinations)</h2>
+        <div class="table-wrap">
+        <table class="metrics">
+            <thead>
+                <tr>
+                    <th>Solver</th>
+                    <th>Runs</th>
+                    <th>Mean Sharpe</th>
+                    <th title="Standard deviation of Sharpe across runs">±σ</th>
+                    <th>Mean Return</th>
+                    <th title="Standard deviation of total return across runs">±σ</th>
+                    <th>Mean Turnover</th>
+                    <th title="Standard deviation of turnover across runs">±σ</th>
+                    <th title="⚠ when std / |mean| &gt; 0.5 for any metric">Variance</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in agg_rows %}
+                <tr{% if row.high_var %} style="background:#fef3c7"{% endif %}>
+                    <td>{{ row.solver }}</td>
+                    <td>{{ row.num_runs }}</td>
+                    <td>{{ row.sharpe_mean }}</td>
+                    <td>{{ row.sharpe_std }}</td>
+                    <td>{{ row.return_mean }}</td>
+                    <td>{{ row.return_std }}</td>
+                    <td>{{ row.turn_mean }}</td>
+                    <td>{{ row.turn_std }}</td>
+                    <td>{{ row.variance }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <p class="footnote">Classical solvers show σ=0.000 because they are deterministic — this is the control baseline. ⚠ rows exceed 50% coefficient of variation on at least one metric.</p>
+    </div>
+    {% endif %}
+
 </div>
 </body>
 </html>"""
@@ -1402,6 +1595,8 @@ def build_quantum_report(
         frontier_data_uri=frontier_data_uri,
         frontier_summary=frontier_summary,
         frontier_note=frontier_note,
+        has_agg=has_agg,
+        agg_rows=agg_rows or [],
     )
 
     with open(output_path, "w", encoding="utf-8") as fh:
@@ -1469,9 +1664,23 @@ def main() -> None:
         if default_cls.exists():
             classical_csv = default_cls
     if quantum_json is None:
-        default_q = args.output_dir / "quantum_result_latest_qamoo.json"
-        if default_q.exists():
-            quantum_json = default_q
+        # Scan for any quantum_result file that contains frontier_points;
+        # pick the most recent by submitted_at, falling back to filename.
+        best_fp_file: Optional[Path] = None
+        best_fp_key: str = ""
+        for _qr_path in args.output_dir.glob("quantum_result_*.json"):
+            try:
+                _qr = json.loads(_qr_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not _qr.get("frontier_points"):
+                continue
+            _key = _qr.get("submitted_at") or _qr_path.name
+            if _key > best_fp_key:
+                best_fp_file = _qr_path
+                best_fp_key = _key
+        if best_fp_file is not None:
+            quantum_json = best_fp_file
 
     frontier_png: Optional[str] = None
     qamoo_result: Optional[Dict[str, Any]] = None
@@ -1490,6 +1699,12 @@ def main() -> None:
     # Group metrics by solver
     metrics_by_solver = {run["solver_name"]: run for run in runs}
 
+    # Aggregate stats across timestamped run archives
+    agg_rows = _build_agg_rows(args.output_dir)
+    if agg_rows:
+        print(f"Aggregated {sum(r['num_runs'] for r in agg_rows)} solver-run(s) "
+              f"across {len(discover_files(args.output_dir))} archive file(s).")
+
     # Build HTML
     html_path = args.output_dir / "quantum_report.html"
     build_quantum_report(
@@ -1501,6 +1716,7 @@ def main() -> None:
         frontier_png=frontier_png,
         frontier_classical_csv=str(classical_csv) if classical_csv else None,
         frontier_qamoo_result=qamoo_result,
+        agg_rows=agg_rows,
     )
 
     print(f"Wrote report to: {html_path}")
