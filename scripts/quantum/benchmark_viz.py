@@ -439,6 +439,7 @@ def _try_augment_runs_from_result_files(
             "signal_quality": qr.get("signal_quality", "low"),
             "top_bitstring_fraction": qr.get("top_bitstring_fraction", 0.0),
             "metadata_key_used": qr.get("metadata_key_used", "unavailable"),
+            "completed_at": qr.get("completed_at", ""),
             "_hardware_only": not has_full_backtest,
         }
         if trade_summary is not None:
@@ -1223,19 +1224,16 @@ def build_quantum_report(
                 "This may indicate the constraint violation path was triggered."
             )
 
-    # Hardware notes: collect IBM runs that have Phase 4 metadata.
-    # Deduplicate by display name, keeping the most recent entry per solver.
-    # backend_calibration_date is the recency proxy (submitted_at is not stored).
-    _ibm_seen: Dict[str, Tuple[str, Dict[str, Any]]] = {}
-    for _solver, _metrics in metrics_by_solver.items():
-        if not _metrics.get("execution_backend", "").startswith("ibm_"):
-            continue
-        _display = _display_name(_solver)
-        _recency = _metrics.get("submitted_at") or _metrics.get("backend_calibration_date", "")
-        _cur = _ibm_seen.get(_display)
-        if _cur is None or _recency > (_cur[1].get("submitted_at") or _cur[1].get("backend_calibration_date", "")):
-            _ibm_seen[_display] = (_solver, _metrics)
-    ibm_runs = list(_ibm_seen.values())
+    # Hardware notes: collect all IBM runs, ordered by completed_at ascending
+    # so readers see the chronological progression of hardware submissions.
+    ibm_runs = sorted(
+        [
+            (solver, metrics)
+            for solver, metrics in metrics_by_solver.items()
+            if metrics.get("execution_backend", "").startswith("ibm_")
+        ],
+        key=lambda t: t[1].get("completed_at", ""),
+    )
     has_ibm_runs = bool(ibm_runs)
 
     hw_rows = []
@@ -1244,6 +1242,8 @@ def build_quantum_report(
         sq = metrics.get("signal_quality", "")
         if sq == "low":
             has_low_signal = True
+        completed = metrics.get("completed_at", "")
+        submitted_display = completed[:10] if completed else "N/A"
         hw_rows.append([
             _display_name(solver),
             metrics.get("execution_backend", ""),
@@ -1251,6 +1251,7 @@ def build_quantum_report(
             metrics.get("backend_calibration_date", "N/A"),
             metrics.get("error_mitigation_method", "N/A"),
             "ok" if sq == "ok" else ("low — results may be noise-dominated" if sq == "low" else sq or "N/A"),
+            submitted_display,
         ])
 
     has_agg = bool(agg_rows)
@@ -1486,6 +1487,7 @@ def build_quantum_report(
                     <th>Calibration Date</th>
                     <th>Error Mitigation</th>
                     <th>Signal Quality</th>
+                    <th>Submitted</th>
                 </tr>
             </thead>
             <tbody>
@@ -1497,6 +1499,7 @@ def build_quantum_report(
                     <td>{{ row[3] }}</td>
                     <td>{{ row[4] }}</td>
                     <td>{{ row[5] }}</td>
+                    <td>{{ row[6] }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
