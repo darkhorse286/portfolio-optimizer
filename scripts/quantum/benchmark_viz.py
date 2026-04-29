@@ -1223,12 +1223,19 @@ def build_quantum_report(
                 "This may indicate the constraint violation path was triggered."
             )
 
-    # Hardware notes: collect IBM runs that have Phase 4 metadata
-    ibm_runs = [
-        (solver, metrics)
-        for solver, metrics in metrics_by_solver.items()
-        if metrics.get("execution_backend", "").startswith("ibm_")
-    ]
+    # Hardware notes: collect IBM runs that have Phase 4 metadata.
+    # Deduplicate by display name, keeping the most recent entry per solver.
+    # backend_calibration_date is the recency proxy (submitted_at is not stored).
+    _ibm_seen: Dict[str, Tuple[str, Dict[str, Any]]] = {}
+    for _solver, _metrics in metrics_by_solver.items():
+        if not _metrics.get("execution_backend", "").startswith("ibm_"):
+            continue
+        _display = _display_name(_solver)
+        _recency = _metrics.get("submitted_at") or _metrics.get("backend_calibration_date", "")
+        _cur = _ibm_seen.get(_display)
+        if _cur is None or _recency > (_cur[1].get("submitted_at") or _cur[1].get("backend_calibration_date", "")):
+            _ibm_seen[_display] = (_solver, _metrics)
+    ibm_runs = list(_ibm_seen.values())
     has_ibm_runs = bool(ibm_runs)
 
     hw_rows = []
