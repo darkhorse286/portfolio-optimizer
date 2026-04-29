@@ -13,7 +13,6 @@ set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
 ROUNDS=3
-BACKEND="ibm_fez"
 SHOTS=1024
 N_FRONTIER=20          # lambda sweep points for QAMOO
 TIMEOUT_MIN=120        # per-algorithm collect timeout
@@ -42,10 +41,16 @@ for f in "$QAOA_PROBLEM" "$QAMO_PROBLEM"; do
     fi
 done
 
+# ── Select backend ───────────────────────────────────────────────────────────
+echo "Querying IBM for operational backends (>= 20 qubits)..."
+BACKEND=$(python3 scripts/quantum/qiskit_submit.py --select-backend --min-qubits 20)
+echo "Selected backend: $BACKEND (shortest queue)"
+
 # Start fresh — remove any leftover batch jobs files from a prior run
 rm -f "$QAOA_JOBS" "$QAMO_JOBS" "$QAMOO_JOBS"
 
 # ── Submit ───────────────────────────────────────────────────────────────────
+echo ""
 echo "=== Submitting $ROUNDS rounds × 3 algorithms to $BACKEND ==="
 
 for round in $(seq 1 $ROUNDS); do

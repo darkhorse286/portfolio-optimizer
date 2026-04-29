@@ -36,6 +36,10 @@ SOLVER_NAME_MAP: Dict[str, str] = {
     "qamoo_20pts_ibm_fez":     "QAMOO (IBM fez)",
     "qamoo_5pts_ibm_fez":      "QAMOO 5pt (IBM fez)",
     "qamoo_20pts_aer_simulator": "QAMOO (Aer Simulator)",
+    "qaoa_p1_ibm_kingston":        "QAOA (IBM kingston)",
+    "qamo_p1_ibm_kingston":        "QAMO (IBM kingston)",
+    "qamoo_20pts_ibm_kingston":    "QAMOO (IBM kingston)",
+    "qamoo_5pts_ibm_kingston":     "QAMOO 5pt (IBM kingston)",
 }
 
 
