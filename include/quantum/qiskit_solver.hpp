@@ -10,7 +10,10 @@
 #include "quantum/qubo_formulation.hpp"
 #include <nlohmann/json.hpp>
 #include <map>
+#include <mutex>
 #include <string>
+#include <sys/types.h>
+#include <cstdio>
 
 namespace portfolio
 {
@@ -31,6 +34,8 @@ namespace portfolio
             std::string jobs_file = "results/quantum_jobs.json";
             std::string results_dir = "results";
             int timeout_minutes = 30;
+            int timeout_seconds = 120;
+            std::string worker_script = "scripts/quantum/qiskit_worker.py";
             bool augment_problem_data = false;  // If true, overwrites expected_returns and covariance
                                               // in the problem file with values computed from
                                               // historical prices before circuit submission.
@@ -54,6 +59,7 @@ namespace portfolio
         public:
             /** @brief Construct with config. */
             explicit QiskitSolver(const QiskitSolverConfig &config);
+            ~QiskitSolver() override;
 
             Eigen::VectorXd optimize(
                 const Eigen::MatrixXd &covariance,
@@ -77,6 +83,18 @@ namespace portfolio
             Eigen::VectorXd read_result_file();
             static bool python3_available();
             static std::string get_python_executable();
+
+            // Persistent Python worker bridge
+            FILE* worker_stdin_ = nullptr;
+            FILE* worker_stdout_ = nullptr;
+            pid_t worker_pid_ = -1;
+            std::mutex worker_mutex_;
+
+            void ensure_worker_running();
+            void restart_worker();
+            nlohmann::json send_request(const nlohmann::json& req);
+            void shutdown_worker();
+            static std::string generate_request_id();
         };
 
     } // namespace quantum
