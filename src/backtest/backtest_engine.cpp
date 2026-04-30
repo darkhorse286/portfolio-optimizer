@@ -124,6 +124,58 @@ namespace portfolio
             }
         }
 
+        Eigen::VectorXd BacktestEngine::project_weights(
+            const Eigen::VectorXd &raw_weights,
+            const optimizer::OptimizationConstraints &constraints) const
+        {
+            int n = raw_weights.size();
+            if (n == 0) return raw_weights;
+
+            Eigen::VectorXd w = raw_weights;
+            double w_min = constraints.min_weight > 0.0 ? constraints.min_weight : 0.0;
+            double w_max = constraints.max_weight < 1.0 ? constraints.max_weight : 1.0;
+
+            // Clip to [0, w_max]
+            w = w.cwiseMax(0.0).cwiseMin(w_max);
+
+            // Zero out positions below min_weight (treat as no position)
+            for (int i = 0; i < n; ++i)
+                if (w[i] > 0.0 && w[i] < w_min) w[i] = 0.0;
+
+            // Fallback when everything zeroed: equal weight across the maximum
+            // number of slots that can each hold >= w_min (avoids a fallback that
+            // itself violates the min-weight constraint).
+            double total = w.sum();
+            if (total <= 1e-10) {
+                int k = (w_min > 1e-10) ? std::min(n, (int)(1.0 / w_min)) : n;
+                w = Eigen::VectorXd::Zero(n);
+                double eq = 1.0 / k;
+                for (int i = 0; i < k; ++i) w[i] = eq;
+                return w;
+            }
+
+            // Iterative clip-and-redistribute: after renorm a capped asset can push
+            // others above w_max, so we clip and spread the deficit to uncapped slots.
+            for (int iter = 0; iter < 20; ++iter) {
+                w /= w.sum();
+                w = w.cwiseMin(w_max);
+                double deficit = 1.0 - w.sum();
+                if (std::abs(deficit) < 1e-10) break;
+                int uncapped = 0;
+                for (int i = 0; i < n; ++i)
+                    if (w[i] < w_max - 1e-12) ++uncapped;
+                if (uncapped == 0) break;
+                double share = deficit / uncapped;
+                for (int i = 0; i < n; ++i)
+                    if (w[i] < w_max - 1e-12) w[i] += share;
+            }
+
+            total = w.sum();
+            if (total > 1e-10) w /= total;
+
+            return w;
+        }
+
         // ------------------------- BacktestResult helpers -----------------------
         double BacktestResult::total_return() const
         {
@@ -388,7 +440,8 @@ namespace portfolio
                             Eigen::VectorXd pre_weights = portfolio.current_weights();
                             try
                             {
-                                Eigen::VectorXd target_weights = optimize_quantum(expected, cov, pre_weights, optimizer);
+                                Eigen::VectorXd raw_weights = optimize_quantum(expected, cov, pre_weights, optimizer);
+                                Eigen::VectorXd target_weights = project_weights(raw_weights, params_.constraints);
 
                                 Eigen::VectorXd shares_traded = portfolio.set_target_weights(target_weights, prices);
 

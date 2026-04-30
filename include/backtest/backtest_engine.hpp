@@ -161,6 +161,11 @@ namespace portfolio
 
             const BacktestParams &params() const { return params_; }
 
+            Eigen::VectorXd project_weights(
+                const Eigen::VectorXd &raw_weights,
+                const optimizer::OptimizationConstraints &constraints
+            ) const;
+
         private:
             BacktestParams params_;
 
@@ -175,6 +180,7 @@ namespace portfolio
                                      const Eigen::MatrixXd &covariance,
                                      const Eigen::VectorXd &current_weights,
                                      optimizer::MeanVarianceOptimizer &optimizer) const;
+
             Eigen::VectorXd optimize_quantum(const Eigen::VectorXd &expected_returns,
                                              const Eigen::MatrixXd &covariance,
                                              const Eigen::VectorXd &current_weights,

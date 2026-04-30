@@ -56,7 +56,7 @@ def run_aer_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[st
         circuit = qiskit_submit.build_qaoa_circuit(num_variables, q_matrix, qaoa_depth, 0.1, 0.1)
 
     backend = AerSimulator()
-    transpiled = transpile(circuit, backend, optimization_level=1)
+    transpiled = transpile(circuit, optimization_level=1)
 
     start_time = time.time()
     job = backend.run(transpiled, shots=shots)

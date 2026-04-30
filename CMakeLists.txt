@@ -235,7 +235,7 @@ foreach(test_src ${TEST_SOURCES})
 endforeach()
 
 # Ensure Qiskit integration test runs from the repo root so Python scripts are located correctly.
-if(TARGET test_qiskit_solver_integration)
+if(TARGET test_test_qiskit_solver_integration)
     set_tests_properties(test_qiskit_solver_integration PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
