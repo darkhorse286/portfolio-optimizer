@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -224,8 +225,26 @@ def _augment_problem_data(problem_file: Path, problem: Dict[str, Any]) -> None:
 
     problem["expected_returns"] = expected_returns
     problem["covariance"] = cov
-    with problem_file.open("w", encoding="utf-8") as f:
-        json.dump(problem, f, indent=2)
+    _atomic_json_write(problem_file, problem)
+
+
+def _atomic_json_write(target_file: Path, obj: Any) -> None:
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path_str = tempfile.mkstemp(
+        dir=target_file.parent,
+        prefix=target_file.stem + "_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+        Path(tmp_path_str).replace(target_file)
+    except Exception:
+        try:
+            os.unlink(tmp_path_str)
+        except OSError:
+            pass
+        raise
 
 
 def build_qaoa_circuit(
@@ -283,9 +302,7 @@ def append_job_entry(jobs_file: Path, job_entry: Dict[str, Any]) -> None:
         }
 
     data["jobs"].append(job_entry)
-    jobs_file.parent.mkdir(parents=True, exist_ok=True)
-    with jobs_file.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    _atomic_json_write(jobs_file, data)
 
 
 def main() -> int:

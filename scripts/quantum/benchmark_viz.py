@@ -1146,6 +1146,7 @@ def build_quantum_report(
 
         trade_summary = metrics.get("trade_summary", {}) or {}
         rebalance_count = trade_summary.get("rebalance_count")
+        skipped_rebalances = trade_summary.get("skipped_rebalances")
         turnover = trade_summary.get("turnover")
         avg_cost = trade_summary.get("avg_cost_per_trade")
         total_costs = trade_summary.get("total_costs")
@@ -1157,15 +1158,18 @@ def build_quantum_report(
             'n/a — single hardware submission, not walk-forward</span>'
         )
 
-        warning_row = isinstance(turnover, (int, float)) and turnover > 1.0
-        if warning_row:
+        warning_row = (
+            (isinstance(turnover, (int, float)) and turnover > 1.0) or
+            (isinstance(skipped_rebalances, int) and skipped_rebalances > 0)
+        )
+        if isinstance(turnover, (int, float)) and turnover > 1.0:
             turnover_warnings.append(solver_name)
 
         if is_ibm:
             activity_rows.append([
                 solver_name,
                 backend,
-                _hw_na, _hw_na, _hw_na, _hw_na,
+                _hw_na, _hw_na, _hw_na, _hw_na, _hw_na,
                 False,
             ])
         else:
@@ -1173,6 +1177,7 @@ def build_quantum_report(
                 solver_name,
                 backend,
                 str(rebalance_count) if rebalance_count is not None else "n/a",
+                str(skipped_rebalances) if skipped_rebalances is not None else "n/a",
                 _format_percentage(turnover, precision=1) if turnover is not None else "n/a",
                 _format_currency(avg_cost),
                 _format_currency(total_costs),
@@ -1422,6 +1427,7 @@ def build_quantum_report(
                     <th>Solver</th>
                     <th>Backend</th>
                     <th>Rebalance Events</th>
+                    <th>Skipped Rebalances</th>
                     <th>Total Turnover</th>
                     <th>Avg Cost Per Trade</th>
                     <th>Total Transaction Costs</th>
@@ -1429,13 +1435,14 @@ def build_quantum_report(
             </thead>
             <tbody>
                 {% for row in activity_rows %}
-                <tr{% if row[6] %} class="warning-row"{% endif %}>
+                <tr{% if row[7] %} class="warning-row"{% endif %}>
                     <td>{{ row[0] | safe }}</td>
                     <td>{{ row[1] }}</td>
                     <td>{{ row[2] | safe }}</td>
                     <td>{{ row[3] | safe }}</td>
                     <td>{{ row[4] | safe }}</td>
                     <td>{{ row[5] | safe }}</td>
+                    <td>{{ row[6] | safe }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

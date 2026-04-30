@@ -361,6 +361,7 @@ namespace portfolio
                             catch (const std::exception &e)
                             {
                                 std::cerr << "Optimization exception on " << date << ": " << e.what() << "\n";
+                                logger.log_skipped_rebalance(date, e.what());
                             }
                         }
                     }
@@ -466,6 +467,7 @@ namespace portfolio
                             catch (const std::exception &e)
                             {
                                 std::cerr << "Optimization exception on " << date << ": " << e.what() << "\n";
+                                logger.log_skipped_rebalance(date, e.what());
                             }
                         }
                     }

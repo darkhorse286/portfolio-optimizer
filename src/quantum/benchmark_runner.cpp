@@ -426,6 +426,7 @@ namespace portfolio
                 // Trade summary
                 const auto& ts = res.trade_summary;
                 run["trade_summary"]["rebalance_count"] = ts.rebalance_count;
+                run["trade_summary"]["skipped_rebalances"] = ts.skipped_rebalances;
                 run["trade_summary"]["turnover"] = ts.turnover;
                 run["trade_summary"]["avg_cost_per_trade"] = ts.avg_cost_per_trade;
                 run["trade_summary"]["total_costs"] = ts.total_costs;
