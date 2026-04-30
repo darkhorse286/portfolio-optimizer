@@ -43,6 +43,9 @@ namespace portfolio
                                               // in the problem file with values computed from
                                               // historical prices before circuit submission.
                                               // Enables informed quantum optimization.
+            std::string ibm_backend_selection = "shortest_queue";
+            int ibm_min_qubits = 20;
+            int n_frontier_points = 20;
             std::map<std::string, double> params;
 
             /**

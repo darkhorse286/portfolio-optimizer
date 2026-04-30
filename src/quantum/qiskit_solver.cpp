@@ -43,7 +43,10 @@ namespace portfolio
             if (j.contains("timeout_minutes"))    cfg.timeout_minutes = j["timeout_minutes"].get<int>();
             if (j.contains("timeout_seconds"))    cfg.timeout_seconds = j["timeout_seconds"].get<int>();
             if (j.contains("worker_script"))      cfg.worker_script = j["worker_script"].get<std::string>();
-            if (j.contains("augment_problem_data")) cfg.augment_problem_data = j["augment_problem_data"].get<bool>();
+            if (j.contains("augment_problem_data"))    cfg.augment_problem_data = j["augment_problem_data"].get<bool>();
+            if (j.contains("ibm_backend_selection"))   cfg.ibm_backend_selection = j["ibm_backend_selection"].get<std::string>();
+            if (j.contains("ibm_min_qubits"))          cfg.ibm_min_qubits = j["ibm_min_qubits"].get<int>();
+            if (j.contains("n_frontier_points"))       cfg.n_frontier_points = j["n_frontier_points"].get<int>();
             if (j.contains("params") && j["params"].is_object()) {
                 for (auto it = j["params"].begin(); it != j["params"].end(); ++it) {
                     cfg.params[it.key()] = it.value().get<double>();
@@ -64,6 +67,9 @@ namespace portfolio
             cfg.problem_file         = e.problem_file;
             cfg.jobs_file            = e.jobs_file;
             cfg.results_dir          = e.results_dir;
+            cfg.ibm_backend_selection = e.ibm_backend_selection;
+            cfg.ibm_min_qubits        = e.ibm_min_qubits;
+            cfg.n_frontier_points     = e.n_frontier_points;
             cfg.params["num_bits_per_asset"] = 2.0;
             return cfg;
         }
@@ -127,7 +133,10 @@ namespace portfolio
                 {"qaoa_depth", config_.qaoa_depth},
                 {"shots", config_.shots},
                 {"problem_file", config_.problem_file},
-                {"augment_problem_data", config_.augment_problem_data}
+                {"augment_problem_data", config_.augment_problem_data},
+                {"ibm_backend_selection", config_.ibm_backend_selection},
+                {"ibm_min_qubits", config_.ibm_min_qubits},
+                {"n_frontier_points", config_.n_frontier_points}
             };
             if (config_.params.count("num_bits_per_asset") > 0)
             {

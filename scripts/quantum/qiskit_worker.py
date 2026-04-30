@@ -36,6 +36,81 @@ def select_best_bitstring(counts: Dict[str, int], q_matrix: List[List[float]]) -
     return min(counts.keys(), key=lambda bs: qiskit_collect.objective_value(q_matrix, bs))
 
 
+def _resolve_ibm_backend(request: Dict[str, Any]) -> str:
+    """Resolve 'ibm_auto' to the best available IBM backend by queue length."""
+    token = os.environ.get("IBM_QUANTUM_TOKEN")
+    instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
+    if not token:
+        raise RuntimeError("IBM_QUANTUM_TOKEN is not set.")
+    from qiskit_ibm_runtime import QiskitRuntimeService
+    service = (
+        QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
+        if instance
+        else QiskitRuntimeService(channel="ibm_quantum_platform", token=token)
+    )
+    min_qubits = int(request.get("ibm_min_qubits", 20))
+    candidates = [
+        b for b in service.backends()
+        if b.num_qubits >= min_qubits and b.status().operational
+    ]
+    if not candidates:
+        raise RuntimeError(
+            f"No operational IBM backends with >= {min_qubits} qubits"
+        )
+    selected = min(candidates, key=lambda b: b.status().pending_jobs)
+    print(f"  ibm_auto selected: {selected.name}", file=sys.stderr)
+    return selected.name
+
+
+def _run_qamoo_sweep(request: Dict[str, Any], problem: Dict[str, Any], shots: int) -> Dict[str, Any]:
+    """Run a QAMOO lambda sweep locally on Aer, regardless of target backend.
+
+    IBM hardware QAMOO would require N separate submissions (one per lambda),
+    making it impractical. The sweep always runs synchronously on Aer.
+    """
+    from qiskit_aer import AerSimulator
+    from qiskit_solver import run_qamoo_sweep
+
+    if "covariance" not in problem:
+        raise RuntimeError(
+            "QAMOO requires 'covariance' in the problem file. "
+            "Set augment_problem_data: true in the solver config."
+        )
+
+    n_frontier_points = int(request.get("n_frontier_points", 20))
+    qamoo_config: Dict[str, Any] = {
+        "n_frontier_points": n_frontier_points,
+        "lambda_min": 0.1,
+        "lambda_max": 20.0,
+        "max_mf_iterations": 50,
+        "mf_convergence_tol": 1e-6,
+    }
+
+    num_assets = int(problem["num_assets"])
+    backend_instance = AerSimulator()
+
+    start_time = time.time()
+    frontier_points, best_weights = run_qamoo_sweep(problem, qamoo_config, backend_instance, shots)
+    end_time = time.time()
+
+    total_w = float(best_weights.sum())
+    weights = (best_weights / total_w).tolist() if total_w > 1e-9 else [1.0 / num_assets] * num_assets
+
+    return {
+        "status": "ok",
+        "job_id": request.get("request_id", ""),
+        "execution_backend": request.get("backend", "aer_simulator"),
+        "weights": weights,
+        "solve_time_ms": float((end_time - start_time) * 1000.0),
+        "circuit_execution_us": -1.0,
+        "convergence_info": (
+            f"QAMOO sweep: {n_frontier_points} points requested, "
+            f"{len(frontier_points)} returned after deduplication"
+        ),
+        "signal_quality": "ok" if frontier_points else "low",
+    }
+
+
 def run_aer_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[str, Any]:
     from qiskit_aer import AerSimulator
 
@@ -47,6 +122,9 @@ def run_aer_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[st
     mode = request["mode"]
     qaoa_depth = int(request["qaoa_depth"])
     optimization_level = int(request.get("optimization_level", 1))
+
+    if mode == "qamoo":
+        return _run_qamoo_sweep(request, problem, shots)
 
     if mode == "qamo":
         from qiskit_solver import build_qamo_circuit
@@ -87,6 +165,10 @@ def run_aer_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[st
 
 
 def run_ibm_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[str, Any]:
+    # QAMOO lambda sweep always runs on Aer — N IBM submissions per sweep is impractical.
+    if request.get("mode") == "qamoo":
+        return _run_qamoo_sweep(request, problem, int(request["shots"]))
+
     token = os.environ.get("IBM_QUANTUM_TOKEN")
     instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
     if not token:
@@ -161,6 +243,10 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
         problem = qiskit_submit.load_problem(problem_file)
         if request.get("augment_problem_data", False):
             qiskit_submit._augment_problem_data(problem_file, problem)
+
+        if backend == "ibm_auto":
+            backend = _resolve_ibm_backend(request)
+            request = {**request, "backend": backend}
 
         if backend == "aer_simulator":
             return run_aer_request(request, problem)

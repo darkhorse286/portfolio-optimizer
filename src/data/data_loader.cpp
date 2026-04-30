@@ -425,9 +425,12 @@ namespace portfolio
                 if (entry.contains("optimization_level"))  e.optimization_level = entry["optimization_level"];
                 if (entry.contains("qaoa_depth"))          e.qaoa_depth = entry["qaoa_depth"];
                 if (entry.contains("shots"))               e.shots = entry["shots"];
-                if (entry.contains("problem_file"))        e.problem_file = entry["problem_file"];
-                if (entry.contains("jobs_file"))           e.jobs_file = entry["jobs_file"];
-                if (entry.contains("results_dir"))         e.results_dir = entry["results_dir"];
+                if (entry.contains("problem_file"))           e.problem_file = entry["problem_file"];
+                if (entry.contains("jobs_file"))              e.jobs_file = entry["jobs_file"];
+                if (entry.contains("results_dir"))            e.results_dir = entry["results_dir"];
+                if (entry.contains("ibm_backend_selection"))  e.ibm_backend_selection = entry["ibm_backend_selection"];
+                if (entry.contains("ibm_min_qubits"))         e.ibm_min_qubits = entry["ibm_min_qubits"];
+                if (entry.contains("n_frontier_points"))      e.n_frontier_points = entry["n_frontier_points"];
                 config.quantum_solvers.push_back(e);
             }
         }

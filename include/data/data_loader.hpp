@@ -112,6 +112,9 @@ struct PortfolioConfig {
         std::string problem_file;
         std::string jobs_file;
         std::string results_dir = "results";
+        std::string ibm_backend_selection = "shortest_queue";
+        int ibm_min_qubits = 20;
+        int n_frontier_points = 20;
     };
     
     std::vector<QuantumSolverEntry> quantum_solvers;

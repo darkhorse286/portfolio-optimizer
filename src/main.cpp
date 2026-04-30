@@ -41,6 +41,11 @@ void print_usage(const char *program_name)
               << "  --results-dir PATH    Alias for --output\n"
               << "  --frontier            Compute efficient frontier\n"
               << "  --benchmark           Run quantum benchmark (MV + SA + Aer QAOA + Aer QAMO)\n"
+              << "  --ibm-benchmark       Submit N rounds of QAOA/QAMO/QAMOO to IBM hardware,\n"
+              << "                        poll until complete, collect results, regenerate report.\n"
+              << "                        Requires IBM_QUANTUM_TOKEN. Config must have solver\n"
+              << "                        entries with backend \"ibm_auto\" in quantum_solvers.\n"
+              << "  --rounds N            Number of IBM submission rounds for --ibm-benchmark (default: 3)\n"
               << "  --verbose             Enable verbose logging\n"
               << "  --help, -h            Show this help message\n"
               << "\nExample:\n"
@@ -77,6 +82,8 @@ struct CommandLineArgs
     bool quantum_submit = false;
     bool quantum_collect = false;
     bool benchmark = false;
+    bool ibm_benchmark = false;
+    int rounds = 3;
 
     static CommandLineArgs parse(int argc, char *argv[])
     {
@@ -121,6 +128,14 @@ struct CommandLineArgs
             else if (arg == "--benchmark")
             {
                 args.benchmark = true;
+            }
+            else if (arg == "--ibm-benchmark")
+            {
+                args.ibm_benchmark = true;
+            }
+            else if (arg == "--rounds" && i + 1 < argc)
+            {
+                args.rounds = std::stoi(argv[++i]);
             }
             else
             {
@@ -341,6 +356,122 @@ static void run_benchmark_viz(const std::string &output_dir)
     {
         std::cerr << "Warning: benchmark_viz.py exited with code " << rc << ".\n";
     }
+}
+
+/**
+ * @brief Submit N rounds of IBM quantum solvers, collect results, and regenerate the report.
+ *
+ * Uses solver entries with backend "ibm_auto" from config.quantum_solvers.
+ * Requires IBM_QUANTUM_TOKEN to be set in the environment.
+ *
+ * @param config      Loaded portfolio configuration.
+ * @param data        Market data already loaded and filtered.
+ * @param output_dir  Directory for results and report outputs.
+ * @param rounds      Number of benchmark rounds (rebalancing periods) to run.
+ */
+static void run_ibm_benchmark(
+    const portfolio::PortfolioConfig &config,
+    const portfolio::MarketData &data,
+    const std::string &output_dir,
+    int rounds)
+{
+    const char *token = std::getenv("IBM_QUANTUM_TOKEN");
+    if (!token || std::string(token).empty())
+    {
+        std::cerr << "Error: IBM_QUANTUM_TOKEN is not set. "
+                  << "--ibm-benchmark requires IBM Quantum access.\n";
+        return;
+    }
+
+    std::vector<portfolio::PortfolioConfig::QuantumSolverEntry> ibm_entries;
+    for (const auto &e : config.quantum_solvers)
+    {
+        if (e.backend == "ibm_auto")
+            ibm_entries.push_back(e);
+    }
+
+    if (ibm_entries.empty())
+    {
+        std::cerr << "No IBM solver entries found (backend: \"ibm_auto\"). "
+                  << "Add them to quantum_solvers in the config before running --ibm-benchmark.\n";
+        return;
+    }
+
+    std::filesystem::create_directories(output_dir);
+
+    // Remove stale IBM jobs files from prior runs
+    for (const auto &entry : ibm_entries)
+    {
+        std::filesystem::remove(
+            output_dir + "/" + std::filesystem::path(entry.jobs_file).filename().string());
+    }
+
+    auto backtest_params = portfolio::backtest::BacktestParams::from_config(config);
+    portfolio::quantum::BenchmarkRunner runner(data, backtest_params);
+
+    // Classical baseline for comparison
+    auto mv_solver = std::make_shared<portfolio::optimizer::MeanVarianceOptimizer>(
+        portfolio::optimizer::ObjectiveType::MAX_SHARPE,
+        config.optimizer.risk_free_rate);
+    runner.add_classical_solver("markowitz_mv", mv_solver);
+
+    // IBM quantum solvers — worker resolves ibm_auto to actual backend at submit time
+    for (const auto &entry : ibm_entries)
+    {
+        portfolio::quantum::QiskitSolverConfig cfg =
+            portfolio::quantum::QiskitSolverConfig::from_entry(entry);
+        cfg.problem_file = output_dir + "/" +
+            std::filesystem::path(cfg.problem_file).filename().string();
+        cfg.jobs_file = output_dir + "/" +
+            std::filesystem::path(cfg.jobs_file).filename().string();
+        cfg.results_dir = output_dir;
+        auto solver = std::make_shared<portfolio::quantum::QiskitSolver>(cfg);
+        runner.add_quantum_solver(entry.name, "quantum", solver);
+    }
+
+    std::cout << "Running IBM benchmark (" << rounds << " rounds)...\n";
+    std::cout << "  IBM solvers:\n";
+    for (const auto &e : ibm_entries)
+        std::cout << "    - " << e.name << "\n";
+
+    auto result = runner.run(rounds);
+    result.print_summary();
+
+    std::string comparison_path = output_dir + "/comparison_results.json";
+    std::string json_output = result.to_json();
+    {
+        std::ofstream out(comparison_path);
+        out << json_output;
+    }
+    std::cout << "IBM benchmark results written to: " << comparison_path << "\n";
+
+    auto now = std::time(nullptr);
+    std::ostringstream ts;
+    ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
+    std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
+    std::ofstream ts_out(timestamped);
+    ts_out << json_output;
+    ts_out.close();
+    std::cout << "Run archived to " << timestamped << "\n";
+
+    // Confirm job status via qiskit_collect (no-op for already-completed jobs)
+    for (const auto &entry : ibm_entries)
+    {
+        std::string jobs_file = output_dir + "/" +
+            std::filesystem::path(entry.jobs_file).filename().string();
+        if (!std::filesystem::exists(jobs_file))
+            continue;
+        std::string collect_cmd =
+            get_python_executable() + " scripts/quantum/qiskit_collect.py"
+            " --jobs-file \"" + jobs_file + "\""
+            " --results-dir \"" + output_dir + "\""
+            " --timeout-min 120"
+            " --poll-interval 30";
+        std::cout << "Confirming job status for " << entry.name << "...\n";
+        std::system(collect_cmd.c_str());
+    }
+
+    run_benchmark_viz(output_dir);
 }
 
 /**
@@ -686,6 +817,11 @@ int run(const CommandLineArgs &args)
         if (args.benchmark)
         {
             run_benchmark(config, data, args.output_dir);
+        }
+
+        if (args.ibm_benchmark)
+        {
+            run_ibm_benchmark(config, data, args.output_dir, args.rounds);
         }
 
         return 0;

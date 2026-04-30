@@ -1,32 +1,24 @@
-#include <gtest/gtest.h>
+#include <catch2/catch_test_macros.hpp>
+#include "data/data_loader.hpp"
+#include "quantum/qiskit_solver.hpp"
 #include <nlohmann/json.hpp>
-#include <data/data_loader.hpp>
-#include <quantum/qiskit_solver.hpp>
 #include <fstream>
 #include <filesystem>
+#include <string>
+#include <unistd.h>
 
+namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-class QuantumConfigTest : public ::testing::Test {
-protected:
-    std::string temp_path;
+static std::string write_temp_config(const json& j) {
+    auto tmp = fs::temp_directory_path() /
+               ("test_quantum_cfg_" + std::to_string(::getpid()) + ".json");
+    std::ofstream f(tmp);
+    f << j.dump(2);
+    return tmp.string();
+}
 
-    void SetUp() override {
-        temp_path = std::filesystem::temp_directory_path() /
-                    ("test_quantum_config_" + std::to_string(::getpid()) + ".json");
-    }
-
-    void TearDown() override {
-        std::filesystem::remove(temp_path);
-    }
-
-    void write_config(const json& j) {
-        std::ofstream f(temp_path);
-        f << j.dump();
-    }
-};
-
-TEST_F(QuantumConfigTest, ParsesQuantumSolversArray) {
+TEST_CASE("quantum_solvers array is parsed into QuantumSolverEntry", "[quantum_config]") {
     json cfg = {
         {"data", {{"universe", {"AAPL", "MSFT"}}, {"data_file", "test.csv"}}},
         {"optimizer", {{"risk_free_rate", 0.02}}},
@@ -46,78 +38,155 @@ TEST_F(QuantumConfigTest, ParsesQuantumSolversArray) {
             {"results_dir", "test_results"}
         }}}
     };
-    write_config(cfg);
+    const std::string path = write_temp_config(cfg);
 
     portfolio::PortfolioConfig config;
-    ASSERT_NO_THROW(config = portfolio::DataLoader::load_config(temp_path));
-    ASSERT_EQ(config.quantum_solvers.size(), 1u);
+    REQUIRE_NOTHROW(config = portfolio::DataLoader::load_config(path));
+    fs::remove(path);
 
-    const auto& solver = config.quantum_solvers[0];
-    EXPECT_EQ(solver.name, "Test QAOA Solver");
-    EXPECT_EQ(solver.type, "quantum");
-    EXPECT_EQ(solver.backend, "aer_simulator");
-    EXPECT_EQ(solver.algorithm_mode, "qaoa");
-    EXPECT_EQ(solver.augment_problem_data, true);
-    EXPECT_EQ(solver.optimization_level, 2);
-    EXPECT_EQ(solver.qaoa_depth, 2);
-    EXPECT_EQ(solver.shots, 2048);
-    EXPECT_EQ(solver.problem_file, "test_problem.json");
-    EXPECT_EQ(solver.jobs_file, "test_jobs.json");
-    EXPECT_EQ(solver.results_dir, "test_results");
+    REQUIRE(config.quantum_solvers.size() == 1u);
+    const auto& s = config.quantum_solvers[0];
+    CHECK(s.name               == "Test QAOA Solver");
+    CHECK(s.type               == "quantum");
+    CHECK(s.backend            == "aer_simulator");
+    CHECK(s.algorithm_mode     == "qaoa");
+    CHECK(s.augment_problem_data == true);
+    CHECK(s.optimization_level == 2);
+    CHECK(s.qaoa_depth         == 2);
+    CHECK(s.shots              == 2048);
+    CHECK(s.problem_file       == "test_problem.json");
+    CHECK(s.jobs_file          == "test_jobs.json");
+    CHECK(s.results_dir        == "test_results");
 }
 
-TEST_F(QuantumConfigTest, DefaultFieldsFallbackToDefaults) {
+TEST_CASE("missing optional fields fall back to struct defaults", "[quantum_config]") {
     json cfg = {
         {"data", {{"universe", {"AAPL"}}, {"data_file", "x.csv"}}},
-        {"optimizer", {}},
-        {"risk_model", {}},
-        {"backtest", {}},
+        {"optimizer", json::object()},
+        {"risk_model", {{"type", "ewma"}}},
+        {"backtest", json::object()},
         {"quantum_solvers", {{{"name", "Minimal"}}}}
     };
-    write_config(cfg);
+    const std::string path = write_temp_config(cfg);
 
     portfolio::PortfolioConfig config;
-    ASSERT_NO_THROW(config = portfolio::DataLoader::load_config(temp_path));
-    ASSERT_EQ(config.quantum_solvers.size(), 1u);
+    REQUIRE_NOTHROW(config = portfolio::DataLoader::load_config(path));
+    fs::remove(path);
 
+    REQUIRE(config.quantum_solvers.size() == 1u);
     const auto& e = config.quantum_solvers[0];
-    EXPECT_EQ(e.name, "Minimal");
-    EXPECT_EQ(e.type, "quantum");
-    EXPECT_EQ(e.backend, "aer_simulator");
-    EXPECT_EQ(e.algorithm_mode, "qaoa");
-    EXPECT_EQ(e.augment_problem_data, false);
-    EXPECT_EQ(e.optimization_level, 1);
-    EXPECT_EQ(e.qaoa_depth, 1);
-    EXPECT_EQ(e.shots, 1024);
-    EXPECT_TRUE(e.problem_file.empty());
-    EXPECT_TRUE(e.jobs_file.empty());
-    EXPECT_EQ(e.results_dir, "results");
+    CHECK(e.name               == "Minimal");
+    CHECK(e.type               == "quantum");
+    CHECK(e.backend            == "aer_simulator");
+    CHECK(e.algorithm_mode     == "qaoa");
+    CHECK(e.augment_problem_data == false);
+    CHECK(e.optimization_level == 1);
+    CHECK(e.qaoa_depth         == 1);
+    CHECK(e.shots              == 1024);
+    CHECK(e.problem_file.empty());
+    CHECK(e.jobs_file.empty());
+    CHECK(e.results_dir        == "results");
+    CHECK(e.ibm_backend_selection == "shortest_queue");
+    CHECK(e.ibm_min_qubits     == 20);
+    CHECK(e.n_frontier_points  == 20);
 }
 
-TEST_F(QuantumConfigTest, QiskitSolverConfigFromEntry) {
+TEST_CASE("ibm_auto fields are parsed and forwarded to QiskitSolverConfig", "[quantum_config]") {
+    json cfg = {
+        {"data", {{"universe", {"AAPL"}}, {"data_file", "x.csv"}}},
+        {"optimizer", json::object()},
+        {"risk_model", {{"type", "ewma"}}},
+        {"backtest", json::object()},
+        {"quantum_solvers", {
+            {
+                {"name", "QAOA (IBM)"},
+                {"backend", "ibm_auto"},
+                {"algorithm_mode", "qaoa"},
+                {"augment_problem_data", false},
+                {"optimization_level", 3},
+                {"qaoa_depth", 1},
+                {"shots", 1024},
+                {"ibm_min_qubits", 20},
+                {"ibm_backend_selection", "shortest_queue"},
+                {"problem_file", "quantum_problem_qaoa_ibm.json"},
+                {"jobs_file", "quantum_jobs_qaoa_ibm.json"}
+            },
+            {
+                {"name", "QAMOO (IBM)"},
+                {"backend", "ibm_auto"},
+                {"algorithm_mode", "qamoo"},
+                {"augment_problem_data", true},
+                {"optimization_level", 3},
+                {"qaoa_depth", 1},
+                {"shots", 1024},
+                {"ibm_min_qubits", 27},
+                {"ibm_backend_selection", "shortest_queue"},
+                {"n_frontier_points", 15},
+                {"problem_file", "quantum_problem_qamoo_ibm.json"},
+                {"jobs_file", "quantum_jobs_qamoo_ibm.json"}
+            }
+        }}
+    };
+    const std::string path = write_temp_config(cfg);
+
+    portfolio::PortfolioConfig config;
+    REQUIRE_NOTHROW(config = portfolio::DataLoader::load_config(path));
+    fs::remove(path);
+
+    REQUIRE(config.quantum_solvers.size() == 2u);
+
+    const auto& qaoa = config.quantum_solvers[0];
+    CHECK(qaoa.backend               == "ibm_auto");
+    CHECK(qaoa.ibm_min_qubits        == 20);
+    CHECK(qaoa.ibm_backend_selection == "shortest_queue");
+    CHECK(qaoa.n_frontier_points     == 20);  // default
+
+    const auto& qamoo = config.quantum_solvers[1];
+    CHECK(qamoo.backend               == "ibm_auto");
+    CHECK(qamoo.algorithm_mode        == "qamoo");
+    CHECK(qamoo.augment_problem_data  == true);
+    CHECK(qamoo.ibm_min_qubits        == 27);
+    CHECK(qamoo.ibm_backend_selection == "shortest_queue");
+    CHECK(qamoo.n_frontier_points     == 15);
+
+    // Verify all three fields survive QuantumSolverEntry -> QiskitSolverConfig conversion
+    const auto solver_cfg = portfolio::quantum::QiskitSolverConfig::from_entry(qamoo);
+    CHECK(solver_cfg.backend               == "ibm_auto");
+    CHECK(solver_cfg.ibm_min_qubits        == 27);
+    CHECK(solver_cfg.ibm_backend_selection == "shortest_queue");
+    CHECK(solver_cfg.n_frontier_points     == 15);
+}
+
+TEST_CASE("QiskitSolverConfig::from_entry maps all fields correctly", "[quantum_config]") {
     portfolio::PortfolioConfig::QuantumSolverEntry entry;
-    entry.name = "Test Solver";
-    entry.backend = "aer_simulator";
-    entry.algorithm_mode = "qaoa";
-    entry.augment_problem_data = true;
-    entry.optimization_level = 3;
-    entry.qaoa_depth = 1;
-    entry.shots = 1024;
-    entry.problem_file = "problem.json";
-    entry.jobs_file = "jobs.json";
-    entry.results_dir = "results";
+    entry.name                  = "Test Solver";
+    entry.backend               = "aer_simulator";
+    entry.algorithm_mode        = "qaoa";
+    entry.augment_problem_data  = true;
+    entry.optimization_level    = 3;
+    entry.qaoa_depth            = 1;
+    entry.shots                 = 1024;
+    entry.problem_file          = "problem.json";
+    entry.jobs_file             = "jobs.json";
+    entry.results_dir           = "results";
+    entry.ibm_backend_selection = "shortest_queue";
+    entry.ibm_min_qubits        = 20;
+    entry.n_frontier_points     = 20;
 
-    auto cfg = portfolio::quantum::QiskitSolverConfig::from_entry(entry);
+    const auto cfg = portfolio::quantum::QiskitSolverConfig::from_entry(entry);
 
-    EXPECT_EQ(cfg.name, "Test Solver");
-    EXPECT_EQ(cfg.backend, "aer_simulator");
-    EXPECT_EQ(cfg.algorithm_mode, "qaoa");
-    EXPECT_EQ(cfg.augment_problem_data, true);
-    EXPECT_EQ(cfg.optimization_level, 3);
-    EXPECT_EQ(cfg.qaoa_depth, 1);
-    EXPECT_EQ(cfg.shots, 1024);
-    EXPECT_EQ(cfg.problem_file, "problem.json");
-    EXPECT_EQ(cfg.jobs_file, "jobs.json");
-    EXPECT_EQ(cfg.results_dir, "results");
-    EXPECT_EQ(cfg.params.at("num_bits_per_asset"), 2.0);
+    CHECK(cfg.name                  == "Test Solver");
+    CHECK(cfg.backend               == "aer_simulator");
+    CHECK(cfg.algorithm_mode        == "qaoa");
+    CHECK(cfg.augment_problem_data  == true);
+    CHECK(cfg.optimization_level    == 3);
+    CHECK(cfg.qaoa_depth            == 1);
+    CHECK(cfg.shots                 == 1024);
+    CHECK(cfg.problem_file          == "problem.json");
+    CHECK(cfg.jobs_file             == "jobs.json");
+    CHECK(cfg.results_dir           == "results");
+    CHECK(cfg.ibm_backend_selection == "shortest_queue");
+    CHECK(cfg.ibm_min_qubits        == 20);
+    CHECK(cfg.n_frontier_points     == 20);
+    CHECK(cfg.params.at("num_bits_per_asset") == 2.0);
 }
