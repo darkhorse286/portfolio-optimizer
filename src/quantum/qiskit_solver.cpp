@@ -31,20 +31,40 @@ namespace portfolio
         QiskitSolverConfig QiskitSolverConfig::from_json(const json &j)
         {
             QiskitSolverConfig cfg;
-            if (j.contains("backend")) cfg.backend = j["backend"].get<std::string>();
-            if (j.contains("qaoa_depth")) cfg.qaoa_depth = j["qaoa_depth"].get<int>();
-            if (j.contains("shots")) cfg.shots = j["shots"].get<int>();
-            if (j.contains("problem_file")) cfg.problem_file = j["problem_file"].get<std::string>();
-            if (j.contains("jobs_file")) cfg.jobs_file = j["jobs_file"].get<std::string>();
-            if (j.contains("results_dir")) cfg.results_dir = j["results_dir"].get<std::string>();
-            if (j.contains("timeout_minutes")) cfg.timeout_minutes = j["timeout_minutes"].get<int>();
-            if (j.contains("timeout_seconds")) cfg.timeout_seconds = j["timeout_seconds"].get<int>();
-            if (j.contains("worker_script")) cfg.worker_script = j["worker_script"].get<std::string>();
+            if (j.contains("name"))               cfg.name = j["name"].get<std::string>();
+            if (j.contains("backend"))            cfg.backend = j["backend"].get<std::string>();
+            if (j.contains("algorithm_mode"))     cfg.algorithm_mode = j["algorithm_mode"].get<std::string>();
+            if (j.contains("optimization_level")) cfg.optimization_level = j["optimization_level"].get<int>();
+            if (j.contains("qaoa_depth"))         cfg.qaoa_depth = j["qaoa_depth"].get<int>();
+            if (j.contains("shots"))              cfg.shots = j["shots"].get<int>();
+            if (j.contains("problem_file"))       cfg.problem_file = j["problem_file"].get<std::string>();
+            if (j.contains("jobs_file"))          cfg.jobs_file = j["jobs_file"].get<std::string>();
+            if (j.contains("results_dir"))        cfg.results_dir = j["results_dir"].get<std::string>();
+            if (j.contains("timeout_minutes"))    cfg.timeout_minutes = j["timeout_minutes"].get<int>();
+            if (j.contains("timeout_seconds"))    cfg.timeout_seconds = j["timeout_seconds"].get<int>();
+            if (j.contains("worker_script"))      cfg.worker_script = j["worker_script"].get<std::string>();
+            if (j.contains("augment_problem_data")) cfg.augment_problem_data = j["augment_problem_data"].get<bool>();
             if (j.contains("params") && j["params"].is_object()) {
                 for (auto it = j["params"].begin(); it != j["params"].end(); ++it) {
                     cfg.params[it.key()] = it.value().get<double>();
                 }
             }
+            return cfg;
+        }
+
+        QiskitSolverConfig QiskitSolverConfig::from_entry(const PortfolioConfig::QuantumSolverEntry& e) {
+            QiskitSolverConfig cfg;
+            cfg.name                 = e.name;
+            cfg.backend              = e.backend;
+            cfg.algorithm_mode       = e.algorithm_mode;
+            cfg.augment_problem_data = e.augment_problem_data;
+            cfg.optimization_level   = e.optimization_level;
+            cfg.qaoa_depth           = e.qaoa_depth;
+            cfg.shots                = e.shots;
+            cfg.problem_file         = e.problem_file;
+            cfg.jobs_file            = e.jobs_file;
+            cfg.results_dir          = e.results_dir;
+            cfg.params["num_bits_per_asset"] = 2.0;
             return cfg;
         }
 
@@ -103,6 +123,7 @@ namespace portfolio
                 {"request_id", generate_request_id()},
                 {"mode", config_.algorithm_mode},
                 {"backend", config_.backend},
+                {"optimization_level", config_.optimization_level},
                 {"qaoa_depth", config_.qaoa_depth},
                 {"shots", config_.shots},
                 {"problem_file", config_.problem_file},
@@ -425,4 +446,5 @@ namespace portfolio
         }
 
     } // namespace quantum
+
 } // namespace portfolio

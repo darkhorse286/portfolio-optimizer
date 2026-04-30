@@ -4,7 +4,7 @@
     "version": "1.0.0",
     "description": "Quantum-ready portfolio optimization with mean-variance and QUBO formulations"
   },
-  
+
   "data": {
     "start_date": "",
     "end_date": "",
@@ -24,7 +24,7 @@
     "data_file": "../market/historical_prices.csv",
     "frequency": "daily"
   },
-  
+
   "optimizer": {
     "type": "mean_variance",
     "objective": "max_sharpe",
@@ -38,7 +38,7 @@
     },
     "risk_free_rate": 0.02
   },
-  
+
   "qubo": {
     "enabled": true,
     "num_bits_per_asset": 4,
@@ -52,7 +52,7 @@
       "random_seed": 42
     }
   },
-  
+
   "ibm_quantum": {
     "enabled": false,
     "backend": "ibm_fez",
@@ -80,7 +80,7 @@
       "backend": "aer_simulator",
       "algorithm_mode": "qaoa",
       "augment_problem_data": false,
-      "optimization_level": 1,
+      "optimization_level": 3,
       "qaoa_depth": 1,
       "shots": 1024,
       "problem_file": "quantum_problem_qaoa.json",
@@ -92,7 +92,7 @@
       "backend": "aer_simulator",
       "algorithm_mode": "qaoa",
       "augment_problem_data": true,
-      "optimization_level": 1,
+      "optimization_level": 3,
       "qaoa_depth": 1,
       "shots": 1024,
       "problem_file": "quantum_problem_qaoa_informed.json",
@@ -104,7 +104,7 @@
       "backend": "aer_simulator",
       "algorithm_mode": "qamo",
       "augment_problem_data": false,
-      "optimization_level": 1,
+      "optimization_level": 3,
       "qaoa_depth": 1,
       "shots": 1024,
       "problem_file": "quantum_problem_qamo.json",
@@ -116,20 +116,68 @@
       "backend": "aer_simulator",
       "algorithm_mode": "qamo",
       "augment_problem_data": true,
-      "optimization_level": 1,
+      "optimization_level": 3,
       "qaoa_depth": 1,
       "shots": 1024,
       "problem_file": "quantum_problem_qamo_informed.json",
       "jobs_file": "quantum_jobs_qamo_informed.json"
+    },
+    {
+      "name": "QAOA Uninformed (IBM)",
+      "type": "quantum",
+      "backend": "ibm_fez",
+      "algorithm_mode": "qaoa",
+      "augment_problem_data": false,
+      "optimization_level": 3,
+      "qaoa_depth": 1,
+      "shots": 1024,
+      "problem_file": "quantum_problem_qaoa_ibm.json",
+      "jobs_file": "quantum_jobs_qaoa_ibm.json"
+    },
+    {
+      "name": "QAOA Informed (IBM)",
+      "type": "quantum",
+      "backend": "ibm_fez",
+      "algorithm_mode": "qaoa",
+      "augment_problem_data": true,
+      "optimization_level": 3,
+      "qaoa_depth": 1,
+      "shots": 1024,
+      "problem_file": "quantum_problem_qaoa_informed_ibm.json",
+      "jobs_file": "quantum_jobs_qaoa_informed_ibm.json"
+    },
+    {
+      "name": "QAMO Uninformed (IBM)",
+      "type": "quantum",
+      "backend": "ibm_fez",
+      "algorithm_mode": "qamo",
+      "augment_problem_data": false,
+      "optimization_level": 3,
+      "qaoa_depth": 1,
+      "shots": 1024,
+      "problem_file": "quantum_problem_qamo_ibm.json",
+      "jobs_file": "quantum_jobs_qamo_ibm.json"
+    },
+    {
+      "name": "QAMO Informed (IBM)",
+      "type": "quantum",
+      "backend": "ibm_fez",
+      "algorithm_mode": "qamo",
+      "augment_problem_data": true,
+      "optimization_level": 3,
+      "qaoa_depth": 1,
+      "shots": 1024,
+      "problem_file": "quantum_problem_qamo_informed_ibm.json",
+      "jobs_file": "quantum_jobs_qamo_informed_ibm.json"
     }
   ],
-  
+
   "risk_model": {
     "type": "ewma",
     "estimation_window": 252,
     "ewma_lambda": 0.94
   },
-  
+
   "backtest": {
     "initial_capital": 1000000.0,
     "rebalance_frequency": "monthly",
@@ -145,49 +193,43 @@
       "cash_return": 0.0
     }
   },
-  
+
   "performance": {
     "metrics": [
       "total_return",
       "annualized_return",
       "volatility",
       "sharpe_ratio",
+      "max_drawdown",
       "sortino_ratio",
       "calmar_ratio",
-      "max_drawdown",
+      "win_rate",
+      "profit_factor",
       "alpha",
       "beta",
       "information_ratio",
-      "tracking_error",
-      "var_95",
-      "cvar_95",
-      "win_rate",
-      "profit_factor"
+      "tracking_error"
     ],
     "benchmark_comparison": true,
-    "risk_free_rate": 0.02,
+    "rolling_window": 252,
     "confidence_level": 0.95
   },
-  
+
   "output": {
     "results_dir": "results",
-    "save_weights": true,
-    "save_returns": true,
-    "save_metrics": true,
-    "save_trades": true,
-    "formats": ["json", "csv"],
     "plots": {
-      "equity_curve": true,
-      "weights_evolution": true,
-      "risk_return": true,
-      "drawdown": true,
-      "rolling_metrics": true
+      "enabled": true,
+      "format": "png",
+      "dpi": 300,
+      "size": {
+        "width": 12,
+        "height": 8
+      }
+    },
+    "reports": {
+      "enabled": true,
+      "format": "markdown",
+      "include_charts": true
     }
-  },
-  
-  "logging": {
-    "level": "INFO",
-    "console": true,
-    "file": "results/portfolio_optimizer.log"
   }
 }

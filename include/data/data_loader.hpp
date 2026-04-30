@@ -98,6 +98,25 @@ struct PortfolioConfig {
     BacktestConfig backtest;
     
     /**
+     * @brief Quantum solver entry configuration
+     */
+    struct QuantumSolverEntry {
+        std::string name;
+        std::string type = "quantum";
+        std::string backend = "aer_simulator";
+        std::string algorithm_mode = "qaoa";
+        bool augment_problem_data = false;
+        int optimization_level = 1;
+        int qaoa_depth = 1;
+        int shots = 1024;
+        std::string problem_file;
+        std::string jobs_file;
+        std::string results_dir = "results";
+    };
+    
+    std::vector<QuantumSolverEntry> quantum_solvers;
+    
+    /**
      * @brief Load complete configuration from JSON file
      */
     static PortfolioConfig load_from_file(const std::string& config_path);

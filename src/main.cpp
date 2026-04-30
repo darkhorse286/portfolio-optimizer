@@ -38,6 +38,7 @@ void print_usage(const char *program_name)
               << "Options:\n"
               << "  --config PATH         Path to configuration JSON file (required)\n"
               << "  --output PATH         Path to output directory (default: results/)\n"
+              << "  --results-dir PATH    Alias for --output\n"
               << "  --frontier            Compute efficient frontier\n"
               << "  --benchmark           Run quantum benchmark (MV + SA + Aer QAOA + Aer QAMO)\n"
               << "  --verbose             Enable verbose logging\n"
@@ -93,7 +94,7 @@ struct CommandLineArgs
             {
                 args.config_path = argv[++i];
             }
-            else if (arg == "--output" && i + 1 < argc)
+            else if ((arg == "--output" || arg == "--results-dir") && i + 1 < argc)
             {
                 args.output_dir = argv[++i];
             }
@@ -359,10 +360,10 @@ static void run_benchmark(
     // Remove stale jobs files so this run starts with a clean slate.
     // Without this, every previous failed/successful job accumulates in the file
     // and collect re-processes them all on each rebalancing period.
-    std::filesystem::remove(output_dir + "/quantum_jobs_qaoa.json");
-    std::filesystem::remove(output_dir + "/quantum_jobs_qaoa_informed.json");
-    std::filesystem::remove(output_dir + "/quantum_jobs_qamo.json");
-    std::filesystem::remove(output_dir + "/quantum_jobs_qamo_informed.json");
+    for (const auto& entry : config.quantum_solvers) {
+        std::filesystem::remove(
+            output_dir + "/" + std::filesystem::path(entry.jobs_file).filename().string());
+    }
 
     auto backtest_params = portfolio::backtest::BacktestParams::from_config(config);
 
@@ -379,7 +380,7 @@ static void run_benchmark(
     auto sa_solver = std::make_shared<portfolio::quantum::SimulatedAnnealingSolver>(sa_config);
     runner.add_quantum_solver("sa_classical", "quantum_inspired", sa_solver);
 
-    // Quantum — QAOA on Aer simulator
+    // Quantum solvers — config-driven registration
     // Preflight: verify qiskit is importable before registering the solver.
     // Without this, a missing qiskit produces one error per rebalancing day.
     bool qiskit_ok = std::system(
@@ -388,69 +389,19 @@ static void run_benchmark(
     {
         std::cerr << "Warning: 'qiskit' not found in Python environment ("
                   << get_python_executable() << "). "
-                  << "Skipping qaoa_p1_aer_simulator solver. "
+                  << "Skipping quantum solvers. "
                   << "Ensure the venv is activated and requirements are installed.\n";
     }
     else
     {
-        // num_bits_per_asset=2 keeps the circuit at 10×2=20 qubits (16 MB statevector).
-        // The default of 4 bits produces 40 qubits (16 TB), which is not simulable locally.
-
-        // QAOA uninformed — raw QUBO Q matrix, no market data augmentation
-        portfolio::quantum::QiskitSolverConfig qaoa_cfg;
-        qaoa_cfg.backend               = "aer_simulator";
-        qaoa_cfg.algorithm_mode        = "qaoa";
-        qaoa_cfg.augment_problem_data  = false;
-        qaoa_cfg.qaoa_depth            = 1;
-        qaoa_cfg.shots                 = 1024;
-        qaoa_cfg.problem_file          = output_dir + "/quantum_problem_qaoa.json";
-        qaoa_cfg.jobs_file             = output_dir + "/quantum_jobs_qaoa.json";
-        qaoa_cfg.results_dir           = output_dir;
-        qaoa_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qaoa_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_cfg);
-        runner.add_quantum_solver("QAOA Uninformed (Aer)", "quantum", qaoa_solver);
-
-        // QAOA informed — augmented with EWMA expected_returns and covariance
-        portfolio::quantum::QiskitSolverConfig qaoa_informed_cfg;
-        qaoa_informed_cfg.backend              = "aer_simulator";
-        qaoa_informed_cfg.algorithm_mode       = "qaoa";
-        qaoa_informed_cfg.augment_problem_data = true;
-        qaoa_informed_cfg.qaoa_depth           = 1;
-        qaoa_informed_cfg.shots                = 1024;
-        qaoa_informed_cfg.problem_file         = output_dir + "/quantum_problem_qaoa_informed.json";
-        qaoa_informed_cfg.jobs_file            = output_dir + "/quantum_jobs_qaoa_informed.json";
-        qaoa_informed_cfg.results_dir          = output_dir;
-        qaoa_informed_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qaoa_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_informed_cfg);
-        runner.add_quantum_solver("QAOA Informed (Aer)", "quantum", qaoa_informed_solver);
-
-        // QAMO uninformed
-        portfolio::quantum::QiskitSolverConfig qamo_cfg;
-        qamo_cfg.backend               = "aer_simulator";
-        qamo_cfg.algorithm_mode        = "qamo";
-        qamo_cfg.augment_problem_data  = false;
-        qamo_cfg.qaoa_depth            = 1;
-        qamo_cfg.shots                 = 1024;
-        qamo_cfg.problem_file          = output_dir + "/quantum_problem_qamo.json";
-        qamo_cfg.jobs_file             = output_dir + "/quantum_jobs_qamo.json";
-        qamo_cfg.results_dir           = output_dir;
-        qamo_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qamo_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_cfg);
-        runner.add_quantum_solver("QAMO Uninformed (Aer)", "quantum", qamo_solver);
-
-        // QAMO informed — current production behavior
-        portfolio::quantum::QiskitSolverConfig qamo_informed_cfg;
-        qamo_informed_cfg.backend              = "aer_simulator";
-        qamo_informed_cfg.algorithm_mode       = "qamo";
-        qamo_informed_cfg.augment_problem_data = true;
-        qamo_informed_cfg.qaoa_depth           = 1;
-        qamo_informed_cfg.shots                = 1024;
-        qamo_informed_cfg.problem_file         = output_dir + "/quantum_problem_qamo_informed.json";
-        qamo_informed_cfg.jobs_file            = output_dir + "/quantum_jobs_qamo_informed.json";
-        qamo_informed_cfg.results_dir          = output_dir;
-        qamo_informed_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qamo_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_informed_cfg);
-        runner.add_quantum_solver("QAMO Informed (Aer)", "quantum", qamo_informed_solver);
+        for (const auto& entry : config.quantum_solvers) {
+            portfolio::quantum::QiskitSolverConfig cfg = portfolio::quantum::QiskitSolverConfig::from_entry(entry);
+            cfg.problem_file = output_dir + "/" + std::filesystem::path(cfg.problem_file).filename().string();
+            cfg.jobs_file = output_dir + "/" + std::filesystem::path(cfg.jobs_file).filename().string();
+            cfg.results_dir = output_dir;
+            auto solver = std::make_shared<portfolio::quantum::QiskitSolver>(cfg);
+            runner.add_quantum_solver(entry.name, "quantum", solver);
+        }
     }
 
     std::cout << "Running benchmark...\n";

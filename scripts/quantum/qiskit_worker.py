@@ -46,6 +46,7 @@ def run_aer_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[st
     shots = int(request["shots"])
     mode = request["mode"]
     qaoa_depth = int(request["qaoa_depth"])
+    optimization_level = int(request.get("optimization_level", 1))
 
     if mode == "qamo":
         from qiskit_solver import build_qamo_circuit
@@ -56,7 +57,7 @@ def run_aer_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[st
         circuit = qiskit_submit.build_qaoa_circuit(num_variables, q_matrix, qaoa_depth, 0.1, 0.1)
 
     backend = AerSimulator()
-    transpiled = transpile(circuit, optimization_level=1)
+    transpiled = transpile(circuit, optimization_level=optimization_level)
 
     start_time = time.time()
     job = backend.run(transpiled, shots=shots)
@@ -101,6 +102,7 @@ def run_ibm_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[st
     mode = request["mode"]
     qaoa_depth = int(request["qaoa_depth"])
     backend_name = request["backend"]
+    optimization_level = int(request.get("optimization_level", 1))
 
     if mode == "qamo":
         from qiskit_solver import build_qamo_circuit
@@ -116,7 +118,7 @@ def run_ibm_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[st
         else QiskitRuntimeService(channel="ibm_quantum_platform", token=token)
     )
     backend = service.backend(backend_name)
-    transpiled = transpile(circuit, backend=backend, optimization_level=1)
+    transpiled = transpile(circuit, backend=backend, optimization_level=optimization_level)
     sampler = SamplerV2(mode=backend)
 
     start_time = time.time()

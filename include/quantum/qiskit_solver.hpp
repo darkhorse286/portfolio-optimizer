@@ -8,10 +8,11 @@
 #include "optimizer/optimizer_interface.hpp"
 #include "quantum/quantum_optimizer.hpp"
 #include "quantum/qubo_formulation.hpp"
-#include <nlohmann/json.hpp>
+#include "data/data_loader.hpp"
+#include <string>
 #include <map>
 #include <mutex>
-#include <string>
+#include <nlohmann/json.hpp>
 #include <sys/types.h>
 #include <cstdio>
 
@@ -26,8 +27,10 @@ namespace portfolio
          */
         struct QiskitSolverConfig
         {
+            std::string name = "";          // Display name for benchmark runner registration
             std::string backend = "aer_simulator";
             std::string algorithm_mode = "qaoa";  // "qaoa" | "qamo"
+            int optimization_level = 1;    // Qiskit transpilation optimization level (0-3)
             int qaoa_depth = 1;
             int shots = 1024;
             std::string problem_file = "results/quantum_problem.json";
@@ -48,6 +51,7 @@ namespace portfolio
              * @return QiskitSolverConfig
              */
             static QiskitSolverConfig from_json(const nlohmann::json &j);
+            static QiskitSolverConfig from_entry(const PortfolioConfig::QuantumSolverEntry& e);
         };
 
         /**

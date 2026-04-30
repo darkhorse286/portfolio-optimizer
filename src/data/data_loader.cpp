@@ -414,6 +414,24 @@ namespace portfolio
             config.backtest = BacktestConfig::from_json(j["backtest"]);
         }
 
+        if (j.contains("quantum_solvers")) {
+            for (const auto& entry : j["quantum_solvers"]) {
+                PortfolioConfig::QuantumSolverEntry e;
+                if (entry.contains("name"))                e.name = entry["name"];
+                if (entry.contains("type"))                e.type = entry["type"];
+                if (entry.contains("backend"))             e.backend = entry["backend"];
+                if (entry.contains("algorithm_mode"))      e.algorithm_mode = entry["algorithm_mode"];
+                if (entry.contains("augment_problem_data"))e.augment_problem_data = entry["augment_problem_data"];
+                if (entry.contains("optimization_level"))  e.optimization_level = entry["optimization_level"];
+                if (entry.contains("qaoa_depth"))          e.qaoa_depth = entry["qaoa_depth"];
+                if (entry.contains("shots"))               e.shots = entry["shots"];
+                if (entry.contains("problem_file"))        e.problem_file = entry["problem_file"];
+                if (entry.contains("jobs_file"))           e.jobs_file = entry["jobs_file"];
+                if (entry.contains("results_dir"))         e.results_dir = entry["results_dir"];
+                config.quantum_solvers.push_back(e);
+            }
+        }
+
         // Resolve relative paths in data config relative to the config file location
         try {
             std::filesystem::path df(config.data.data_file);
