@@ -316,6 +316,12 @@ namespace portfolio
 
                 result.sector_weights = compute_sector_weights(data_.get_tickers(), avg_weights);
 
+                // Store per-asset weights and tickers for per-solver attribution in the viz
+                result.tickers = data_.get_tickers();
+                result.avg_weights.resize(avg_weights.size());
+                for (int i = 0; i < avg_weights.size(); ++i)
+                    result.avg_weights[i] = avg_weights[i];
+
                 // For benchmark, use equal weight across sectors (simplified)
                 // In a real implementation, this would be the benchmark's sector weights
                 std::unordered_map<std::string, double> benchmark_weights;
@@ -420,9 +426,17 @@ namespace portfolio
                 // Trade summary
                 const auto& ts = res.trade_summary;
                 run["trade_summary"]["rebalance_count"] = ts.rebalance_count;
+                run["trade_summary"]["skipped_rebalances"] = ts.skipped_rebalances;
                 run["trade_summary"]["turnover"] = ts.turnover;
                 run["trade_summary"]["avg_cost_per_trade"] = ts.avg_cost_per_trade;
                 run["trade_summary"]["total_costs"] = ts.total_costs;
+
+                // Per-asset weights and tickers for Brinson-Fachler attribution
+                run["tickers"] = res.tickers;
+                nlohmann::json weights_arr = nlohmann::json::array();
+                for (int i = 0; i < static_cast<int>(res.avg_weights.size()); ++i)
+                    weights_arr.push_back(res.avg_weights[i]);
+                run["avg_weights"] = weights_arr;
 
                 // Sector weights
                 run["sector_weights"] = res.sector_weights;

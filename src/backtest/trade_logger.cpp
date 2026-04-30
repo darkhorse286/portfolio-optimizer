@@ -102,6 +102,7 @@ TradeSummary TradeLogger::get_summary() const
     TradeSummary s;
     s.total_trades = static_cast<int>(trades_.size());
     s.rebalance_count = rebalance_count_;
+    s.skipped_rebalances = skipped_rebalances_;
 
     for (const auto &t : trades_)
     {
@@ -126,6 +127,13 @@ TradeSummary TradeLogger::get_summary() const
     s.turnover = turnover_;
 
     return s;
+}
+
+void TradeLogger::log_skipped_rebalance(const std::string &date, const std::string &reason)
+{
+    (void)date;
+    (void)reason;
+    skipped_rebalances_++;
 }
 
 void TradeLogger::export_to_csv(const std::string &filepath) const

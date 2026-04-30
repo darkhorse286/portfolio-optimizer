@@ -21,7 +21,10 @@
 #include <iomanip>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 using namespace portfolio;
 
@@ -353,10 +356,13 @@ static void run_benchmark(
 {
     std::filesystem::create_directories(output_dir);
 
-    // Remove stale jobs file so this run starts with a clean slate.
+    // Remove stale jobs files so this run starts with a clean slate.
     // Without this, every previous failed/successful job accumulates in the file
     // and collect re-processes them all on each rebalancing period.
-    std::filesystem::remove(output_dir + "/quantum_jobs.json");
+    std::filesystem::remove(output_dir + "/quantum_jobs_qaoa.json");
+    std::filesystem::remove(output_dir + "/quantum_jobs_qaoa_informed.json");
+    std::filesystem::remove(output_dir + "/quantum_jobs_qamo.json");
+    std::filesystem::remove(output_dir + "/quantum_jobs_qamo_informed.json");
 
     auto backtest_params = portfolio::backtest::BacktestParams::from_config(config);
 
@@ -389,29 +395,62 @@ static void run_benchmark(
     {
         // num_bits_per_asset=2 keeps the circuit at 10×2=20 qubits (16 MB statevector).
         // The default of 4 bits produces 40 qubits (16 TB), which is not simulable locally.
-        portfolio::quantum::QiskitSolverConfig qaoa_cfg;
-        qaoa_cfg.backend         = "aer_simulator";
-        qaoa_cfg.algorithm_mode  = "qaoa";
-        qaoa_cfg.qaoa_depth      = 1;
-        qaoa_cfg.shots           = 1024;
-        qaoa_cfg.problem_file    = output_dir + "/quantum_problem.json";
-        qaoa_cfg.jobs_file       = output_dir + "/quantum_jobs.json";
-        qaoa_cfg.results_dir     = output_dir;
-        qaoa_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qiskit_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_cfg);
-        runner.add_quantum_solver("qaoa_p1_aer_simulator", "quantum", qiskit_solver);
 
+        // QAOA uninformed — raw QUBO Q matrix, no market data augmentation
+        portfolio::quantum::QiskitSolverConfig qaoa_cfg;
+        qaoa_cfg.backend               = "aer_simulator";
+        qaoa_cfg.algorithm_mode        = "qaoa";
+        qaoa_cfg.augment_problem_data  = false;
+        qaoa_cfg.qaoa_depth            = 1;
+        qaoa_cfg.shots                 = 1024;
+        qaoa_cfg.problem_file          = output_dir + "/quantum_problem_qaoa.json";
+        qaoa_cfg.jobs_file             = output_dir + "/quantum_jobs_qaoa.json";
+        qaoa_cfg.results_dir           = output_dir;
+        qaoa_cfg.params["num_bits_per_asset"] = 2.0;
+        auto qaoa_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_cfg);
+        runner.add_quantum_solver("QAOA Uninformed (Aer)", "quantum", qaoa_solver);
+
+        // QAOA informed — augmented with EWMA expected_returns and covariance
+        portfolio::quantum::QiskitSolverConfig qaoa_informed_cfg;
+        qaoa_informed_cfg.backend              = "aer_simulator";
+        qaoa_informed_cfg.algorithm_mode       = "qaoa";
+        qaoa_informed_cfg.augment_problem_data = true;
+        qaoa_informed_cfg.qaoa_depth           = 1;
+        qaoa_informed_cfg.shots                = 1024;
+        qaoa_informed_cfg.problem_file         = output_dir + "/quantum_problem_qaoa_informed.json";
+        qaoa_informed_cfg.jobs_file            = output_dir + "/quantum_jobs_qaoa_informed.json";
+        qaoa_informed_cfg.results_dir          = output_dir;
+        qaoa_informed_cfg.params["num_bits_per_asset"] = 2.0;
+        auto qaoa_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_informed_cfg);
+        runner.add_quantum_solver("QAOA Informed (Aer)", "quantum", qaoa_informed_solver);
+
+        // QAMO uninformed
         portfolio::quantum::QiskitSolverConfig qamo_cfg;
-        qamo_cfg.backend         = "aer_simulator";
-        qamo_cfg.algorithm_mode  = "qamo";
-        qamo_cfg.qaoa_depth      = 1;
-        qamo_cfg.shots           = 1024;
-        qamo_cfg.problem_file    = output_dir + "/quantum_problem.json";
-        qamo_cfg.jobs_file       = output_dir + "/quantum_jobs.json";
-        qamo_cfg.results_dir     = output_dir;
+        qamo_cfg.backend               = "aer_simulator";
+        qamo_cfg.algorithm_mode        = "qamo";
+        qamo_cfg.augment_problem_data  = false;
+        qamo_cfg.qaoa_depth            = 1;
+        qamo_cfg.shots                 = 1024;
+        qamo_cfg.problem_file          = output_dir + "/quantum_problem_qamo.json";
+        qamo_cfg.jobs_file             = output_dir + "/quantum_jobs_qamo.json";
+        qamo_cfg.results_dir           = output_dir;
         qamo_cfg.params["num_bits_per_asset"] = 2.0;
         auto qamo_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_cfg);
-        runner.add_quantum_solver("qamo_p1_aer_simulator", "quantum", qamo_solver);
+        runner.add_quantum_solver("QAMO Uninformed (Aer)", "quantum", qamo_solver);
+
+        // QAMO informed — current production behavior
+        portfolio::quantum::QiskitSolverConfig qamo_informed_cfg;
+        qamo_informed_cfg.backend              = "aer_simulator";
+        qamo_informed_cfg.algorithm_mode       = "qamo";
+        qamo_informed_cfg.augment_problem_data = true;
+        qamo_informed_cfg.qaoa_depth           = 1;
+        qamo_informed_cfg.shots                = 1024;
+        qamo_informed_cfg.problem_file         = output_dir + "/quantum_problem_qamo_informed.json";
+        qamo_informed_cfg.jobs_file            = output_dir + "/quantum_jobs_qamo_informed.json";
+        qamo_informed_cfg.results_dir          = output_dir;
+        qamo_informed_cfg.params["num_bits_per_asset"] = 2.0;
+        auto qamo_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_informed_cfg);
+        runner.add_quantum_solver("QAMO Informed (Aer)", "quantum", qamo_informed_solver);
     }
 
     std::cout << "Running benchmark...\n";
@@ -420,8 +459,21 @@ static void run_benchmark(
     result.print_summary();
 
     std::string comparison_path = output_dir + "/comparison_results.json";
-    result.export_comparison_json(comparison_path);
+    std::string json_output = result.to_json();
+    {
+        std::ofstream out(comparison_path);
+        out << json_output;
+    }
     std::cout << "Comparison results written to: " << comparison_path << "\n";
+
+    auto now = std::time(nullptr);
+    std::ostringstream ts;
+    ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
+    std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
+    std::ofstream ts_out(timestamped);
+    ts_out << json_output;
+    ts_out.close();
+    std::cout << "Run archived to " << timestamped << "\n";
 
     run_benchmark_viz(output_dir);
 }

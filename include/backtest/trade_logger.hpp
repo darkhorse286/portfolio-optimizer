@@ -32,6 +32,7 @@ struct TradeSummary {
     double total_costs = 0.0;
     double avg_cost_per_trade = 0.0;
     int rebalance_count = 0;
+    int skipped_rebalances = 0;
     double turnover = 0.0;
 };
 
@@ -56,15 +57,19 @@ public:
     TradeSummary get_summary() const;
     int num_trades() const { return static_cast<int>(trades_.size()); }
 
+    void log_skipped_rebalance(const std::string& date, const std::string& reason);
+    int skipped_rebalance_count() const { return skipped_rebalances_; }
+
     void export_to_csv(const std::string& filepath) const;
     void print_summary() const;
 
-    void clear() { trades_.clear(); next_trade_id_ = 0; rebalance_count_ = 0; }
+    void clear() { trades_.clear(); next_trade_id_ = 0; rebalance_count_ = 0; skipped_rebalances_ = 0; turnover_ = 0.0; }
 
 private:
     std::vector<TradeRecord> trades_;
     int next_trade_id_ = 0;
     int rebalance_count_ = 0;
+    int skipped_rebalances_ = 0;
     double turnover_ = 0.0;
 };
 

@@ -43,6 +43,8 @@ namespace portfolio
             std::vector<double> nav_series;
             std::vector<std::string> date_series;
             portfolio::backtest::TradeSummary trade_summary;
+            std::vector<double> avg_weights;
+            std::vector<std::string> tickers;
             std::unordered_map<std::string, double> sector_weights;
             std::unordered_map<std::string, double> benchmark_sector_weights;
         };

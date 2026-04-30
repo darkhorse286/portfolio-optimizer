@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -71,9 +72,28 @@ def parse_args() -> argparse.Namespace:
         help="Maximum lambda value for QAMOO sweep.",
     )
     parser.add_argument(
+        "--augment-problem-data",
+        action="store_true",
+        help="Overwrite expected_returns and covariance in the problem file with "
+             "values computed from historical prices before circuit submission.",
+    )
+    parser.add_argument(
         "--list-backends",
         action="store_true",
         help="Authenticate with IBM, print available backends with qubit counts and queue depths, then exit 0.",
+    )
+    parser.add_argument(
+        "--select-backend",
+        action="store_true",
+        help="Print the name of the operational IBM backend with the shortest queue "
+             "(fewest pending jobs) and at least --min-qubits qubits, then exit 0. "
+             "Designed for use with command substitution: BACKEND=$(... --select-backend).",
+    )
+    parser.add_argument(
+        "--min-qubits",
+        type=int,
+        default=20,
+        help="Minimum qubit count when selecting a backend with --select-backend (default: 20).",
     )
     parser.add_argument(
         "--error-mitigation",
@@ -97,7 +117,7 @@ def validate_ibm_credentials() -> bool:
         # Try to list backends to verify
         backends = service.backends()
         if backends:
-            print("PASS: IBM Quantum credentials are valid.")
+            print("PASS: IBM Quantum credentials are valid.", file=sys.stderr)
             return True
         else:
             print("FAIL: No backends available.", file=sys.stderr)
@@ -205,8 +225,26 @@ def _augment_problem_data(problem_file: Path, problem: Dict[str, Any]) -> None:
 
     problem["expected_returns"] = expected_returns
     problem["covariance"] = cov
-    with problem_file.open("w", encoding="utf-8") as f:
-        json.dump(problem, f, indent=2)
+    _atomic_json_write(problem_file, problem)
+
+
+def _atomic_json_write(target_file: Path, obj: Any) -> None:
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path_str = tempfile.mkstemp(
+        dir=target_file.parent,
+        prefix=target_file.stem + "_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+        Path(tmp_path_str).replace(target_file)
+    except Exception:
+        try:
+            os.unlink(tmp_path_str)
+        except OSError:
+            pass
+        raise
 
 
 def build_qaoa_circuit(
@@ -264,15 +302,13 @@ def append_job_entry(jobs_file: Path, job_entry: Dict[str, Any]) -> None:
         }
 
     data["jobs"].append(job_entry)
-    jobs_file.parent.mkdir(parents=True, exist_ok=True)
-    with jobs_file.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    _atomic_json_write(jobs_file, data)
 
 
 def main() -> int:
     args = parse_args()
 
-    if args.list_backends:
+    if args.list_backends or args.select_backend:
         if not validate_ibm_credentials():
             sys.exit(1)
         from qiskit_ibm_runtime import QiskitRuntimeService
@@ -280,14 +316,37 @@ def main() -> int:
         instance = os.environ.get("IBM_QUANTUM_INSTANCE", "")
         service = QiskitRuntimeService(channel="ibm_quantum_platform", token=token, instance=instance)
         backends = service.backends()
-        print("Available IBM Quantum backends:")
+
+        if args.list_backends:
+            print("Available IBM Quantum backends:")
+            for backend in backends:
+                status = backend.status()
+                pending_jobs = getattr(status, 'pending_jobs', 'N/A')
+                print(f"  {backend.name}: {backend.num_qubits} qubits, "
+                      f"operational={status.operational}, pending_jobs={pending_jobs}")
+            sys.exit(0)
+
+        # --select-backend: pick the operational backend with the fewest pending jobs.
+        candidates = []
         for backend in backends:
-            name = backend.name
-            num_qubits = backend.num_qubits
             status = backend.status()
-            operational = status.operational
-            pending_jobs = getattr(status, 'pending_jobs', 'N/A')
-            print(f"  {name}: {num_qubits} qubits, operational={operational}, pending_jobs={pending_jobs}")
+            if not status.operational:
+                continue
+            if backend.num_qubits < args.min_qubits:
+                continue
+            pending = getattr(status, 'pending_jobs', float('inf'))
+            candidates.append((pending, backend.name))
+
+        if not candidates:
+            print(
+                f"Error: no operational IBM backend with >= {args.min_qubits} qubits found.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        candidates.sort()
+        # Print only the backend name — clean for shell command substitution.
+        print(candidates[0][1])
         sys.exit(0)
 
     problem_file = Path(args.problem_file)
@@ -301,9 +360,7 @@ def main() -> int:
     qaoa_depth = args.qaoa_depth
     mode = args.mode
 
-    # For QAMO/QAMOO: overwrite expected_returns and covariance with values
-    # computed from historical prices so they match the classical optimizer.
-    if mode in ("qamo", "qamoo"):
+    if args.augment_problem_data:
         _augment_problem_data(problem_file, problem)
 
     # Build initial circuit for submit-time validation / job-id generation
