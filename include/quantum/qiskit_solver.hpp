@@ -78,6 +78,7 @@ namespace portfolio
             std::string convergence_info() const override;
             std::string solver_name() const override;
             std::string execution_backend() const override;
+            std::string signal_quality() const;
 
         private:
             QiskitSolverConfig config_;
@@ -85,6 +86,8 @@ namespace portfolio
             double last_circuit_execution_us_ = -1.0;
             std::string last_convergence_info_;
             std::string last_job_id_;
+            std::string last_execution_backend_;
+            std::string last_signal_quality_;
 
             void write_problem_file(const QUBOFormulation &qubo) const;
             Eigen::VectorXd read_result_file();

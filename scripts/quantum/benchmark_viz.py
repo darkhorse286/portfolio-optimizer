@@ -481,6 +481,28 @@ def _fill_solution_quality(runs: List[Dict[str, Any]]) -> None:
             run["solution_quality_vs_classical"] = sharpe / classical_sharpe
 
 
+def _fill_synthetic_nav_for_runs(
+    runs: List[Dict[str, Any]],
+    prices_csv: Path,
+    risk_free_rate: float = 0.02,
+) -> None:
+    """Compute buy-and-hold NAV series for runs with avg_weights but empty nav_series."""
+    for run in runs:
+        if run.get("nav_series"):
+            continue
+        weights = run.get("avg_weights", [])
+        tickers = run.get("tickers", [])
+        if not weights or not tickers or len(weights) != len(tickers):
+            continue
+        result = _compute_static_portfolio_metrics(weights, tickers, prices_csv, risk_free_rate)
+        if result is None:
+            continue
+        perf, nav_series = result
+        run["nav_series"] = nav_series
+        run["performance"] = perf
+        run["_synthetic_nav"] = True
+
+
 def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) -> None:
     """Plot normalized equity curves for all solvers.
 
@@ -509,7 +531,14 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
         if nav_values:
             first_nav = nav_values[0]
             normalized = [v / first_nav for v in nav_values]
-            plt.plot(x_axis, normalized, label=_display_name(solver_name), color=_solver_color(run))
+            is_synthetic = run.get("_synthetic_nav", False)
+            label = _display_name(solver_name) + (" (sim)" if is_synthetic else "")
+            plt.plot(
+                x_axis, normalized,
+                label=label,
+                color=_solver_color(run),
+                linestyle="--" if is_synthetic else "-",
+            )
 
     plt.xlabel("Date")
     plt.ylabel("Portfolio Value (Normalized to 1.0)")
@@ -1662,6 +1691,23 @@ def main() -> None:
     _augment_cpp_sector_data(runs)
 
     # Fill any missing solution_quality_vs_classical values from Sharpe ratios
+    _fill_solution_quality(runs)
+
+    # Compute buy-and-hold equity curves for IBM runs that have weights but no nav_series
+    _repo_root = Path(__file__).resolve().parent.parent.parent
+    _prices_csv = _repo_root / "data" / "market" / "historical_prices.csv"
+    _risk_free_rate = 0.02
+    _cfg_path = _repo_root / "data" / "config" / "portfolio_config.json"
+    if _cfg_path.exists():
+        try:
+            with _cfg_path.open() as _f:
+                _cfg = json.load(_f)
+            _risk_free_rate = float(_cfg.get("optimizer", {}).get("risk_free_rate", 0.02))
+        except Exception:
+            pass
+    _fill_synthetic_nav_for_runs(runs, _prices_csv, _risk_free_rate)
+
+    # Update solution_quality now that synthetic NAV has populated performance metrics
     _fill_solution_quality(runs)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

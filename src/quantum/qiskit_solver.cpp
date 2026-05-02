@@ -176,6 +176,8 @@ namespace portfolio
             last_circuit_execution_us_ = response.value("circuit_execution_us", -1.0);
             last_convergence_info_ = response.value("convergence_info", "");
             last_job_id_ = response.value("job_id", "");
+            last_execution_backend_ = response.value("execution_backend", config_.backend);
+            last_signal_quality_ = response.value("signal_quality", "");
 
             Eigen::VectorXd weights(response["weights"].size());
             for (size_t i = 0; i < response["weights"].size(); ++i)
@@ -207,7 +209,12 @@ namespace portfolio
 
         std::string QiskitSolver::execution_backend() const
         {
-            return config_.backend;
+            return last_execution_backend_.empty() ? config_.backend : last_execution_backend_;
+        }
+
+        std::string QiskitSolver::signal_quality() const
+        {
+            return last_signal_quality_;
         }
 
         std::string QiskitSolver::generate_request_id()
