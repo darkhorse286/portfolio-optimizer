@@ -115,6 +115,7 @@ struct PortfolioConfig {
         std::string ibm_backend_selection = "shortest_queue";
         int ibm_min_qubits = 20;
         int n_frontier_points = 20;
+        int timeout_seconds = 120;
     };
     
     std::vector<QuantumSolverEntry> quantum_solvers;

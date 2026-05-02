@@ -431,6 +431,7 @@ namespace portfolio
                 if (entry.contains("ibm_backend_selection"))  e.ibm_backend_selection = entry["ibm_backend_selection"];
                 if (entry.contains("ibm_min_qubits"))         e.ibm_min_qubits = entry["ibm_min_qubits"];
                 if (entry.contains("n_frontier_points"))      e.n_frontier_points = entry["n_frontier_points"];
+                if (entry.contains("timeout_seconds"))        e.timeout_seconds = entry["timeout_seconds"];
                 config.quantum_solvers.push_back(e);
             }
         }

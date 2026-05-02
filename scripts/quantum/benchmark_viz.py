@@ -353,8 +353,11 @@ def _try_augment_runs_from_result_files(
                     "metadata_key_used",
                     "physical_qubits",
                 ):
-                    if key in qr and key not in run:
+                    if key in qr and not run.get(key):
                         run[key] = qr[key]
+                # Resolve "ibm_auto" to the actual backend from the result file
+                if qr.get("execution_backend") and run.get("execution_backend") == "ibm_auto":
+                    run["execution_backend"] = qr["execution_backend"]
 
         # Accumulate Case 2 candidates — skip legacy/walk-forward names and
         # solvers already present in comparison_results.json.

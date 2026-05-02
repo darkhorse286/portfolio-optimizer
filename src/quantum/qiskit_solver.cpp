@@ -70,6 +70,7 @@ namespace portfolio
             cfg.ibm_backend_selection = e.ibm_backend_selection;
             cfg.ibm_min_qubits        = e.ibm_min_qubits;
             cfg.n_frontier_points     = e.n_frontier_points;
+            cfg.timeout_seconds       = e.timeout_seconds;
             cfg.params["num_bits_per_asset"] = 2.0;
             return cfg;
         }
