@@ -151,18 +151,20 @@
       "jobs_file": "quantum_jobs_qamo_ibm.json"
     },
     {
-      "name": "QAMOO (Aer)",
+      "name": "QAMOO (IBM)",
       "type": "quantum",
-      "backend": "aer_simulator",
+      "backend": "ibm_auto",
       "algorithm_mode": "qamoo",
       "augment_problem_data": true,
       "optimization_level": 3,
       "qaoa_depth": 1,
       "shots": 1024,
+      "ibm_min_qubits": 20,
+      "ibm_backend_selection": "shortest_queue",
       "n_frontier_points": 20,
       "timeout_seconds": 600,
-      "problem_file": "quantum_problem_qamoo_aer.json",
-      "jobs_file": "quantum_jobs_qamoo_aer.json"
+      "problem_file": "quantum_problem_qamoo_ibm.json",
+      "jobs_file": "quantum_jobs_qamoo_ibm.json"
     }
   ],
 

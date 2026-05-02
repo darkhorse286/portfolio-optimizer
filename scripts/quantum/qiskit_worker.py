@@ -245,6 +245,9 @@ def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
             qiskit_submit._augment_problem_data(problem_file, problem)
 
         if backend == "ibm_auto":
+            # QAMOO always runs on Aer regardless of backend — skip IBM resolution.
+            if mode == "qamoo":
+                return _run_qamoo_sweep(request, problem, int(request.get("shots", 1024)))
             backend = _resolve_ibm_backend(request)
             request = {**request, "backend": backend}
 
