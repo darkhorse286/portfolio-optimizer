@@ -96,9 +96,11 @@ def _run_qamoo_sweep(request: Dict[str, Any], problem: Dict[str, Any], shots: in
     total_w = float(best_weights.sum())
     weights = (best_weights / total_w).tolist() if total_w > 1e-9 else [1.0 / num_assets] * num_assets
 
-    return {
+    request_id = request.get("request_id", "")
+    completed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+    result = {
         "status": "ok",
-        "job_id": request.get("request_id", ""),
+        "job_id": request_id,
         "execution_backend": request.get("backend", "aer_simulator"),
         "weights": weights,
         "solve_time_ms": float((end_time - start_time) * 1000.0),
@@ -108,7 +110,23 @@ def _run_qamoo_sweep(request: Dict[str, Any], problem: Dict[str, Any], shots: in
             f"{len(frontier_points)} returned after deduplication"
         ),
         "signal_quality": "ok" if frontier_points else "low",
+        "frontier_points": frontier_points,
+        "completed_at": completed_at,
+        "solver_name": "QAMOO (Aer)",
+        "universe": problem.get("tickers", []),
     }
+
+    # Write quantum_result file so benchmark_viz can find frontier_points for the Pareto chart.
+    problem_file = request.get("problem_file", "")
+    if problem_file:
+        results_dir = Path(problem_file).parent
+        result_path = results_dir / f"quantum_result_{request_id}.json"
+        try:
+            result_path.write_text(json.dumps(result, indent=2))
+        except Exception as exc:
+            print(f"Warning: could not write QAMOO result file: {exc}", file=sys.stderr)
+
+    return result
 
 
 def run_aer_request(request: Dict[str, Any], problem: Dict[str, Any]) -> Dict[str, Any]:

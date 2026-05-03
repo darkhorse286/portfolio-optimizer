@@ -79,6 +79,13 @@ WALK_FORWARD_SOLVER_NAMES: set[str] = {
 _LEGACY_AER_SOLVER_NAMES: set[str] = {
     "qaoa_p1_aer_simulator",
     "qamo_p1_aer_simulator",
+    # Old QAMOO naming scheme from pre-Phase-5 result files.
+    # These are used only as frontier_points sources; never inject as solver rows.
+    "qamoo_20pts_aer_simulator",
+    "qamoo_5pts_ibm_fez",
+    "qamoo_20pts_ibm_fez",
+    "qamoo_20pts_ibm_kingston",
+    "qamoo_20pts_ibm_marrakesh",
 }
 
 
@@ -535,10 +542,9 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
             first_nav = nav_values[0]
             normalized = [v / first_nav for v in nav_values]
             is_synthetic = run.get("_synthetic_nav", False)
-            label = _display_name(solver_name) + (" (sim)" if is_synthetic else "")
             plt.plot(
                 x_axis, normalized,
-                label=label,
+                label=_display_name(solver_name),
                 color=_solver_color(run),
                 linestyle="--" if is_synthetic else "-",
             )
@@ -1069,6 +1075,7 @@ def build_quantum_report(
     frontier_classical_csv: Optional[str] = None,
     frontier_qamoo_result: Optional[Dict[str, Any]] = None,
     agg_rows: Optional[List[Dict[str, Any]]] = None,
+    has_synthetic_nav: bool = False,
 ) -> None:
     """Build self-contained HTML report.
 
@@ -1391,6 +1398,15 @@ def build_quantum_report(
     </div>
     {% endif %}
 
+    {% if has_synthetic_nav %}
+    <div class="callout">
+        <strong>Notice:</strong> IBM hardware solvers produced a single set of optimized weights
+        rather than a full walk-forward backtest. Their equity curves (shown as dashed lines) are
+        computed by holding those weights constant over the entire backtest period.
+        Solid lines represent monthly rebalanced walk-forward backtests.
+    </div>
+    {% endif %}
+
     <div class="section">
         <h2>Solver Comparison — Equity Curves</h2>
         <div class="chart-wrap">
@@ -1640,6 +1656,7 @@ def build_quantum_report(
         has_ibm_runs=has_ibm_runs,
         hw_rows=hw_rows,
         has_low_signal=has_low_signal,
+        has_synthetic_nav=has_synthetic_nav,
         has_frontier=has_frontier,
         frontier_data_uri=frontier_data_uri,
         frontier_summary=frontier_summary,
@@ -1726,9 +1743,14 @@ def main() -> None:
     classical_csv = args.frontier_classical
     quantum_json = args.frontier_quantum
     if classical_csv is None:
-        default_cls = args.output_dir.parent / "results" / "efficient_frontier.csv"
-        if default_cls.exists():
-            classical_csv = default_cls
+        for _candidate in [
+            args.output_dir / "efficient_frontier.csv",
+            args.output_dir.parent / "results" / "efficient_frontier.csv",
+            args.output_dir.parent / "efficient_frontier.csv",
+        ]:
+            if _candidate.exists():
+                classical_csv = _candidate
+                break
     if quantum_json is None:
         # Scan for any quantum_result file that contains frontier_points;
         # pick the most recent by submitted_at, falling back to filename.
@@ -1765,6 +1787,8 @@ def main() -> None:
     # Group metrics by solver
     metrics_by_solver = {run["solver_name"]: run for run in runs}
 
+    has_synthetic_nav = any(run.get("_synthetic_nav") for run in runs)
+
     # Aggregate stats across timestamped run archives
     agg_rows = _build_agg_rows(args.output_dir)
     if agg_rows:
@@ -1783,6 +1807,7 @@ def main() -> None:
         frontier_classical_csv=str(classical_csv) if classical_csv else None,
         frontier_qamoo_result=qamoo_result,
         agg_rows=agg_rows,
+        has_synthetic_nav=has_synthetic_nav,
     )
 
     print(f"Wrote report to: {html_path}")
