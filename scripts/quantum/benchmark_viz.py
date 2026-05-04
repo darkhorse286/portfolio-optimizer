@@ -347,6 +347,12 @@ def _try_augment_runs_from_result_files(
         solver_name = qr.get("solver_name", "")
         backend = qr.get("execution_backend", "")
 
+        # Hard guard: skip any IBM QAMOO results — they are stale baseline artifacts
+        solver_name_lower = solver_name.lower()
+        if "qamoo" in solver_name_lower and backend.startswith("ibm_"):
+            print(f"  SKIP: blocking stale IBM QAMOO injection ({solver_name})")
+            continue
+
         # Case 1: merge Phase 4 metadata into an existing matching run
         for run in runs:
             if run.get("solver_name") == solver_name:
@@ -359,6 +365,7 @@ def _try_augment_runs_from_result_files(
                     "top_bitstring_fraction",
                     "metadata_key_used",
                     "physical_qubits",
+                    "rounds_averaged",
                 ):
                     if key in qr and not run.get(key):
                         run[key] = qr[key]
@@ -1289,6 +1296,11 @@ def build_quantum_report(
             has_low_signal = True
         completed = metrics.get("completed_at", "")
         submitted_display = completed[:10] if completed else "N/A"
+        rounds_averaged = metrics.get("rounds_averaged", "N/A")
+        if isinstance(rounds_averaged, int):
+            rounds_display = f"{rounds_averaged} rounds averaged"
+        else:
+            rounds_display = "—"
         hw_rows.append([
             _display_name(solver),
             metrics.get("execution_backend", ""),
@@ -1297,7 +1309,7 @@ def build_quantum_report(
             metrics.get("error_mitigation_method", "N/A"),
             "ok" if sq == "ok" else ("low — results may be noise-dominated" if sq == "low" else sq or "N/A"),
             submitted_display,
-            str(metrics.get("rounds_averaged", "N/A")),
+            rounds_display,
         ])
 
     has_agg = bool(agg_rows)
@@ -1709,7 +1721,9 @@ def main() -> None:
     runs = data.get("runs", [])
 
     # Augment runs with Phase 4 fields from quantum_result_*.json files
-    _try_augment_runs_from_result_files(runs, args.output_dir)
+    # Skip for improved config runs — IBM results are already in the archive
+    if data.get("config_version") != "improved":
+        _try_augment_runs_from_result_files(runs, args.output_dir)
 
     # Convert C++ dict-format sector_weights to list format with return values
     _augment_cpp_sector_data(runs)

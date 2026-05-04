@@ -627,6 +627,7 @@ static void run_ibm_benchmark(
                 output_json = prev;
                 output_json["runs"]   = base_runs;
                 output_json["run_id"] = j["run_id"];
+                output_json["config_version"] = config.config_version;
             }
             catch (const nlohmann::json::exception &)
             {
@@ -644,6 +645,7 @@ static void run_ibm_benchmark(
     ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
     std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
     j["config_version"] = config.config_version;
+    std::cout << "Archiving run with config_version: " << config.config_version << "\n";
     std::ofstream ts_out(timestamped);
     ts_out << j.dump(2);  // archive IBM-only results (not the merged file)
     ts_out.close();
@@ -755,6 +757,7 @@ static void run_benchmark(
     std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
     nlohmann::json archive_json = nlohmann::json::parse(json_output);
     archive_json["config_version"] = config.config_version;
+    std::cout << "Archiving run with config_version: " << config.config_version << "\n";
     std::ofstream ts_out(timestamped);
     ts_out << archive_json.dump(2);
     ts_out.close();
