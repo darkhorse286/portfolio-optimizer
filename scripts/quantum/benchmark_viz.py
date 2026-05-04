@@ -451,6 +451,7 @@ def _try_augment_runs_from_result_files(
             "metadata_key_used": qr.get("metadata_key_used", "unavailable"),
             "completed_at": qr.get("completed_at", ""),
             "_hardware_only": not has_full_backtest,
+            "_synthetic_nav": True,  # Mark quantum_result injections as synthetic so they render dashed
         }
         if trade_summary is not None:
             injected["trade_summary"] = trade_summary
@@ -1296,6 +1297,7 @@ def build_quantum_report(
             metrics.get("error_mitigation_method", "N/A"),
             "ok" if sq == "ok" else ("low — results may be noise-dominated" if sq == "low" else sq or "N/A"),
             submitted_display,
+            str(metrics.get("rounds_averaged", "N/A")),
         ])
 
     has_agg = bool(agg_rows)
@@ -1543,6 +1545,7 @@ def build_quantum_report(
                     <th>Error Mitigation</th>
                     <th>Signal Quality</th>
                     <th>Submitted</th>
+                    <th>Rounds Averaged</th>
                 </tr>
             </thead>
             <tbody>
@@ -1555,6 +1558,7 @@ def build_quantum_report(
                     <td>{{ row[4] }}</td>
                     <td>{{ row[5] }}</td>
                     <td>{{ row[6] }}</td>
+                    <td>{{ row[7] }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

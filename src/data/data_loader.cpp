@@ -394,6 +394,11 @@ namespace portfolio
 
         PortfolioConfig config;
 
+        if (j.contains("config_version"))
+        {
+            config.config_version = j["config_version"];
+        }
+
         if (j.contains("data"))
         {
             config.data = DataConfig::from_json(j["data"]);

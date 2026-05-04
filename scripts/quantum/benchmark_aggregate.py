@@ -98,7 +98,7 @@ def _get_float(d: dict, key: str) -> Optional[float]:
         return None
 
 
-def load_runs(files: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
+def load_runs(files: List[Path], config_version: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
     """Load and group solver runs by normalised solver_name.
 
     Fields are read from the actual schema produced by main.cpp:
@@ -112,6 +112,10 @@ def load_runs(files: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
             print(f"Warning: could not read {path.name}: {exc}")
+            continue
+
+        if config_version and data.get("config_version", "default") != config_version:
+            print(f"Skipping {path.name}: config_version {data.get('config_version', 'default')} != {config_version}")
             continue
 
         for run in data.get("runs", []):
@@ -224,6 +228,11 @@ def main() -> None:
         default=Path("results"),
         help="Directory containing comparison_results_[0-9]*.json files (default: results/).",
     )
+    parser.add_argument(
+        "--config-version",
+        default=None,
+        help="Filter archives by config_version field. Skips files that don't match.",
+    )
     args = parser.parse_args()
 
     results_dir: Path = args.results_dir
@@ -242,7 +251,7 @@ def main() -> None:
     for f in files:
         print(f"  {f.name}")
 
-    by_solver = load_runs(files)
+    by_solver = load_runs(files, args.config_version)
     if not by_solver:
         print("No solver runs found across discovered files.")
         return

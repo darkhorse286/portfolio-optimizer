@@ -481,7 +481,7 @@ static void run_ibm_benchmark(
                 run["avg_weights"]              = wa;
                 run["sector_weights"]           = nlohmann::json::object();
                 run["benchmark_sector_weights"] = nlohmann::json::object();
-                j["runs"].push_back(run);
+                // Note: Classical baseline not added to IBM archive (already in --benchmark archive)
             }
         }
         catch (const std::exception &e)
@@ -587,6 +587,7 @@ static void run_ibm_benchmark(
         run["avg_weights"]                          = avg_weights_arr;
         run["sector_weights"]                       = nlohmann::json::object();
         run["benchmark_sector_weights"]             = nlohmann::json::object();
+        run["rounds_averaged"]                      = rounds;
         j["runs"].push_back(run);
     }
 
@@ -642,6 +643,7 @@ static void run_ibm_benchmark(
     std::ostringstream ts;
     ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
     std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
+    j["config_version"] = config.config_version;
     std::ofstream ts_out(timestamped);
     ts_out << j.dump(2);  // archive IBM-only results (not the merged file)
     ts_out.close();
@@ -751,8 +753,10 @@ static void run_benchmark(
     std::ostringstream ts;
     ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
     std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
+    nlohmann::json archive_json = nlohmann::json::parse(json_output);
+    archive_json["config_version"] = config.config_version;
     std::ofstream ts_out(timestamped);
-    ts_out << json_output;
+    ts_out << archive_json.dump(2);
     ts_out.close();
     std::cout << "Run archived to " << timestamped << "\n";
 

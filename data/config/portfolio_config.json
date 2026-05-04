@@ -4,6 +4,7 @@
     "version": "1.0.0",
     "description": "Quantum-ready portfolio optimization with mean-variance and QUBO formulations"
   },
+  "config_version": "default",
   
   "data": {
     "start_date": "",

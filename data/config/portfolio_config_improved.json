@@ -4,6 +4,7 @@
     "version": "1.0.0",
     "description": "Quantum-ready portfolio optimization with mean-variance and QUBO formulations"
   },
+  "config_version": "improved",
 
   "data": {
     "start_date": "",
@@ -149,21 +150,6 @@
       "ibm_backend_selection": "shortest_queue",
       "problem_file": "quantum_problem_qamo_ibm.json",
       "jobs_file": "quantum_jobs_qamo_ibm.json"
-    },
-    {
-      "name": "QAMOO (Aer)",
-      "type": "quantum",
-      "backend": "ibm_auto",
-      "algorithm_mode": "qamoo",
-      "augment_problem_data": true,
-      "optimization_level": 3,
-      "qaoa_depth": 1,
-      "shots": 1024,
-      "ibm_min_qubits": 20,
-      "ibm_backend_selection": "shortest_queue",
-      "timeout_seconds": 600,
-      "problem_file": "quantum_problem_qamoo_ibm.json",
-      "jobs_file": "quantum_jobs_qamoo_ibm.json"
     }
   ],
 

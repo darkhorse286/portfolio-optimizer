@@ -96,6 +96,7 @@ struct PortfolioConfig {
     OptimizerConfig optimizer;
     risk::RiskModelConfig risk_model;
     BacktestConfig backtest;
+    std::string config_version = "default";
     
     /**
      * @brief Quantum solver entry configuration
