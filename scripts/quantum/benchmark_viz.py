@@ -945,7 +945,7 @@ def _format_currency(value: Any) -> str:
         return "n/a"
 
 
-def _build_agg_rows(results_dir: Path) -> List[Dict[str, Any]]:
+def _build_agg_rows(results_dir: Path, config_version: str | None = None) -> List[Dict[str, Any]]:
     """Return per-solver aggregate stats for the HTML report section.
 
     Source 1: timestamped comparison_results_[0-9]*.json archives (walk-forward Aer).
@@ -963,8 +963,8 @@ def _build_agg_rows(results_dir: Path) -> List[Dict[str, Any]]:
         return []
 
     # --- Part 1: walk-forward results from timestamped archives ---
-    files = discover_files(results_dir)
-    by_solver: Dict[str, List[Dict[str, Any]]] = load_runs(files) if files else {}
+    files = discover_files(results_dir, config_version)
+    by_solver: Dict[str, List[Dict[str, Any]]] = load_runs(files, config_version) if files else {}
     # Snapshot names from archives so Part 2 can skip them without also
     # blocking accumulation of multiple files for the same IBM solver.
     archive_solvers: set[str] = set(by_solver.keys())
@@ -1294,20 +1294,48 @@ def build_quantum_report(
         sq = metrics.get("signal_quality", "")
         if sq == "low":
             has_low_signal = True
+
+        circuit_depth = (
+            metrics.get("circuit_depth")
+            or metrics.get("avg_circuit_depth")
+            or "N/A"
+        )
+        calibration_date = (
+            metrics.get("backend_calibration_date")
+            or metrics.get("calibration_date")
+            or "N/A"
+        )
         completed = metrics.get("completed_at", "")
         submitted_display = completed[:10] if completed else "N/A"
+        signal_quality = (
+            metrics.get("signal_quality")
+            or "low — results may be noise-dominated"
+        )
+        error_mitigation = (
+            metrics.get("error_mitigation_method")
+            or "none"
+        )
         rounds_averaged = metrics.get("rounds_averaged", "N/A")
         if isinstance(rounds_averaged, int):
             rounds_display = f"{rounds_averaged} rounds averaged"
         else:
             rounds_display = "—"
+
+        if metrics.get("scalar_metadata_source") == "most_recent_round":
+            circuit_depth_display = (
+                f'<span title="From most recent of {rounds_averaged} rounds">'
+                f'{circuit_depth}</span>'
+            )
+        else:
+            circuit_depth_display = str(circuit_depth)
+
         hw_rows.append([
             _display_name(solver),
             metrics.get("execution_backend", ""),
-            str(metrics.get("circuit_depth", "N/A")),
-            metrics.get("backend_calibration_date", "N/A"),
-            metrics.get("error_mitigation_method", "N/A"),
-            "ok" if sq == "ok" else ("low — results may be noise-dominated" if sq == "low" else sq or "N/A"),
+            circuit_depth_display,
+            calibration_date,
+            error_mitigation,
+            signal_quality,
             submitted_display,
             rounds_display,
         ])
@@ -1565,7 +1593,7 @@ def build_quantum_report(
                 <tr>
                     <td>{{ row[0] }}</td>
                     <td>{{ row[1] }}</td>
-                    <td>{{ row[2] }}</td>
+                    <td>{{ row[2] | safe }}</td>
                     <td>{{ row[3] }}</td>
                     <td>{{ row[4] }}</td>
                     <td>{{ row[5] }}</td>
@@ -1711,6 +1739,11 @@ def main() -> None:
         default=None,
         help="Path to QAMOO result JSON for frontier comparison.",
     )
+    parser.add_argument(
+        "--config-version",
+        default=None,
+        help="Only aggregate archive files with this config_version tag.",
+    )
 
     args = parser.parse_args()
 
@@ -1808,10 +1841,10 @@ def main() -> None:
     has_synthetic_nav = any(run.get("_synthetic_nav") for run in runs)
 
     # Aggregate stats across timestamped run archives
-    agg_rows = _build_agg_rows(args.output_dir)
+    agg_rows = _build_agg_rows(args.output_dir, args.config_version)
     if agg_rows:
         print(f"Aggregated {sum(r['num_runs'] for r in agg_rows)} solver-run(s) "
-              f"across {len(discover_files(args.output_dir))} archive file(s).")
+              f"across {len(discover_files(args.output_dir, args.config_version))} archive file(s).")
 
     # Build HTML
     html_path = args.output_dir / "quantum_report.html"

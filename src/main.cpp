@@ -333,9 +333,10 @@ static void run_quantum_collect(const std::string &output_dir)
 /**
  * @brief Invoke benchmark_viz.py to render comparison_results.json into an HTML report.
  *
- * @param output_dir Directory containing comparison_results.json and receiving outputs.
+ * @param output_dir     Directory containing comparison_results.json and receiving outputs.
+ * @param config_version Config version tag; passed as --config-version to filter archives.
  */
-static void run_benchmark_viz(const std::string &output_dir)
+static void run_benchmark_viz(const std::string &output_dir, const std::string &config_version)
 {
     if (!python3_available())
     {
@@ -347,7 +348,8 @@ static void run_benchmark_viz(const std::string &output_dir)
     std::string comparison_file = output_dir + "/comparison_results.json";
     std::string cmd = get_python_executable() + " scripts/quantum/benchmark_viz.py"
                       " --comparison-file \"" + comparison_file + "\""
-                      " --output-dir \"" + output_dir + "\"";
+                      " --output-dir \"" + output_dir + "\""
+                      " --config-version " + config_version;
     int rc = std::system(cmd.c_str());
     if (rc == 0)
     {
@@ -358,6 +360,17 @@ static void run_benchmark_viz(const std::string &output_dir)
         std::cerr << "Warning: benchmark_viz.py exited with code " << rc << ".\n";
     }
 }
+
+struct IbmRoundMetadata
+{
+    int         circuit_depth = 0;
+    std::string calibration_date;
+    std::string submitted_at;
+    std::string execution_backend;
+    std::string signal_quality;
+    std::string error_mitigation_method;
+    std::string convergence_info;
+};
 
 /**
  * @brief Submit N rounds of IBM quantum solvers, collect results, and regenerate the report.
@@ -510,6 +523,7 @@ static void run_ibm_benchmark(
         std::vector<double> circuit_times;
         std::vector<std::string> signal_qualities;
         std::string resolved_backend;
+        IbmRoundMetadata latest_metadata;
 
         for (int r = 0; r < rounds; ++r)
         {
@@ -522,6 +536,19 @@ static void run_ibm_benchmark(
                 signal_qualities.push_back(solver->signal_quality());
                 if (resolved_backend.empty())
                     resolved_backend = solver->execution_backend();
+
+                // Overwrite with this round's values; the final iteration gives the most recent round.
+                latest_metadata.execution_backend    = solver->execution_backend();
+                latest_metadata.signal_quality       = solver->signal_quality();
+                latest_metadata.convergence_info     = solver->convergence_info();
+                latest_metadata.error_mitigation_method = "none";
+                {
+                    auto ts_now = std::time(nullptr);
+                    std::ostringstream ts_ss;
+                    ts_ss << std::put_time(std::gmtime(&ts_now), "%Y-%m-%dT%H:%M:%SZ");
+                    latest_metadata.submitted_at = ts_ss.str();
+                }
+
                 std::cout << "    Round " << (r + 1) << "/" << rounds
                           << " complete (" << solver->solve_time_ms() << " ms)\n";
             }
@@ -553,20 +580,13 @@ static void run_ibm_benchmark(
         };
 
         nlohmann::json run;
-        // Determine dominant signal quality: "ok" if any round was ok, else "low", else "".
-        std::string dominant_signal;
-        for (const auto &sq : signal_qualities)
-        {
-            if (sq == "ok") { dominant_signal = "ok"; break; }
-            if (sq == "low") dominant_signal = "low";
-        }
 
         run["solver_name"]                          = entry.name;
         run["solver_type"]                          = "quantum";
-        run["execution_backend"]                    = resolved_backend.empty()
+        run["execution_backend"]                    = latest_metadata.execution_backend.empty()
                                                         ? solver->execution_backend()
-                                                        : resolved_backend;
-        run["signal_quality"]                       = dominant_signal;
+                                                        : latest_metadata.execution_backend;
+        run["signal_quality"]                       = latest_metadata.signal_quality;
         run["problem_size"]                         = static_cast<int>(data.num_assets());
         run["performance"]["sharpe_ratio"]          = mean_sharpe;
         run["performance"]["total_return"]          = mean_return;
@@ -588,6 +608,12 @@ static void run_ibm_benchmark(
         run["sector_weights"]                       = nlohmann::json::object();
         run["benchmark_sector_weights"]             = nlohmann::json::object();
         run["rounds_averaged"]                      = rounds;
+        run["circuit_depth"]                        = latest_metadata.circuit_depth;
+        run["backend_calibration_date"]             = latest_metadata.calibration_date;
+        run["completed_at"]                         = latest_metadata.submitted_at;
+        run["error_mitigation_method"]              = latest_metadata.error_mitigation_method;
+        run["convergence_info"]                     = latest_metadata.convergence_info;
+        run["scalar_metadata_source"]               = "most_recent_round";
         j["runs"].push_back(run);
     }
 
@@ -668,7 +694,7 @@ static void run_ibm_benchmark(
         std::system(collect_cmd.c_str());
     }
 
-    run_benchmark_viz(output_dir);
+    run_benchmark_viz(output_dir, config.config_version);
 }
 
 /**
@@ -763,7 +789,7 @@ static void run_benchmark(
     ts_out.close();
     std::cout << "Run archived to " << timestamped << "\n";
 
-    run_benchmark_viz(output_dir);
+    run_benchmark_viz(output_dir, config.config_version);
 }
 
 /**
