@@ -76,14 +76,41 @@ def _fmt(value: float, precision: int = 3) -> str:
 # File discovery
 # ---------------------------------------------------------------------------
 
-def discover_files(results_dir: str | Path) -> List[Path]:
-    """Return timestamped comparison_results_[0-9]*.json files, sorted."""
+def discover_files(results_dir: str | Path, config_version: Optional[str] = None) -> List[Path]:
+    """Return timestamped comparison_results_[0-9]*.json files, filtered by config_version if specified.
+    
+    Args:
+        results_dir: Directory containing comparison_results_[0-9]*.json files.
+        config_version: Optional filter; only include files matching this config_version value.
+                       Files with config_version=MISSING are treated as non-matching.
+    
+    Returns:
+        List of matching file paths, sorted.
+    """
     pattern = os.path.join(str(results_dir), "comparison_results_[0-9]*.json")
-    files = sorted(
+    all_files = sorted(
         Path(f) for f in glob.glob(pattern)
         if not f.endswith("comparison_results_latest.json")
     )
-    return files
+    
+    if config_version is None:
+        return all_files
+    
+    # Filter by config_version with diagnostic output
+    included = []
+    for path in all_files:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            file_version = data.get("config_version", "MISSING")
+            matches = file_version == config_version
+            print(f"  {'INCLUDE' if matches else 'EXCLUDE'}: {path.name} (config_version={file_version})")
+            if matches:
+                included.append(path)
+        except Exception as e:
+            print(f"  SKIP (unreadable): {path.name}: {e}")
+    
+    print(f"\n  {len(included)} of {len(all_files)} files included.\n")
+    return included
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +125,7 @@ def _get_float(d: dict, key: str) -> Optional[float]:
         return None
 
 
-def load_runs(files: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
+def load_runs(files: List[Path], config_version: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
     """Load and group solver runs by normalised solver_name.
 
     Fields are read from the actual schema produced by main.cpp:
@@ -112,6 +139,15 @@ def load_runs(files: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
             print(f"Warning: could not read {path.name}: {exc}")
+            continue
+
+        file_version = data.get("config_version", "default")
+        matches = config_version is None or file_version == config_version
+        
+        if config_version:
+            print(f"  {'Including' if matches else 'Excluding'}: {path.name} (config_version={file_version})")
+        
+        if not matches:
             continue
 
         for run in data.get("runs", []):
@@ -133,6 +169,11 @@ def load_runs(files: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
                 "solver_type":           run.get("solver_type", ""),
                 "execution_backend":     run.get("execution_backend", ""),
             }
+            
+            # Debug print for all-null entries
+            if all(v is None for v in [entry["sharpe_ratio"], entry["total_return"]]):
+                print(f"  WARNING: All-null entry for solver '{name}' in {path.name}")
+            
             by_solver.setdefault(name, []).append(entry)
 
     return by_solver
@@ -224,13 +265,19 @@ def main() -> None:
         default=Path("results"),
         help="Directory containing comparison_results_[0-9]*.json files (default: results/).",
     )
+    parser.add_argument(
+        "--config-version",
+        default=None,
+        help="Filter archives by config_version field. Skips files that don't match.",
+    )
     args = parser.parse_args()
 
     results_dir: Path = args.results_dir
     if not results_dir.exists():
         raise FileNotFoundError(f"Results directory not found: {results_dir}")
 
-    files = discover_files(results_dir)
+    print(f"Discovering files in {results_dir}...")
+    files = discover_files(results_dir, args.config_version)
     if not files:
         print(
             f"No timestamped comparison_results_[0-9]*.json files found in {results_dir}. "
@@ -238,11 +285,7 @@ def main() -> None:
         )
         return
 
-    print(f"Found {len(files)} run file(s):")
-    for f in files:
-        print(f"  {f.name}")
-
-    by_solver = load_runs(files)
+    by_solver = load_runs(files, args.config_version)
     if not by_solver:
         print("No solver runs found across discovered files.")
         return

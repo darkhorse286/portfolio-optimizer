@@ -394,6 +394,11 @@ namespace portfolio
 
         PortfolioConfig config;
 
+        if (j.contains("config_version"))
+        {
+            config.config_version = j["config_version"];
+        }
+
         if (j.contains("data"))
         {
             config.data = DataConfig::from_json(j["data"]);
@@ -412,6 +417,28 @@ namespace portfolio
         if (j.contains("backtest"))
         {
             config.backtest = BacktestConfig::from_json(j["backtest"]);
+        }
+
+        if (j.contains("quantum_solvers")) {
+            for (const auto& entry : j["quantum_solvers"]) {
+                PortfolioConfig::QuantumSolverEntry e;
+                if (entry.contains("name"))                e.name = entry["name"];
+                if (entry.contains("type"))                e.type = entry["type"];
+                if (entry.contains("backend"))             e.backend = entry["backend"];
+                if (entry.contains("algorithm_mode"))      e.algorithm_mode = entry["algorithm_mode"];
+                if (entry.contains("augment_problem_data"))e.augment_problem_data = entry["augment_problem_data"];
+                if (entry.contains("optimization_level"))  e.optimization_level = entry["optimization_level"];
+                if (entry.contains("qaoa_depth"))          e.qaoa_depth = entry["qaoa_depth"];
+                if (entry.contains("shots"))               e.shots = entry["shots"];
+                if (entry.contains("problem_file"))           e.problem_file = entry["problem_file"];
+                if (entry.contains("jobs_file"))              e.jobs_file = entry["jobs_file"];
+                if (entry.contains("results_dir"))            e.results_dir = entry["results_dir"];
+                if (entry.contains("ibm_backend_selection"))  e.ibm_backend_selection = entry["ibm_backend_selection"];
+                if (entry.contains("ibm_min_qubits"))         e.ibm_min_qubits = entry["ibm_min_qubits"];
+                if (entry.contains("n_frontier_points"))      e.n_frontier_points = entry["n_frontier_points"];
+                if (entry.contains("timeout_seconds"))        e.timeout_seconds = entry["timeout_seconds"];
+                config.quantum_solvers.push_back(e);
+            }
         }
 
         // Resolve relative paths in data config relative to the config file location

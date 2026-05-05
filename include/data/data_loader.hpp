@@ -96,6 +96,30 @@ struct PortfolioConfig {
     OptimizerConfig optimizer;
     risk::RiskModelConfig risk_model;
     BacktestConfig backtest;
+    std::string config_version = "default";
+    
+    /**
+     * @brief Quantum solver entry configuration
+     */
+    struct QuantumSolverEntry {
+        std::string name;
+        std::string type = "quantum";
+        std::string backend = "aer_simulator";
+        std::string algorithm_mode = "qaoa";
+        bool augment_problem_data = false;
+        int optimization_level = 1;
+        int qaoa_depth = 1;
+        int shots = 1024;
+        std::string problem_file;
+        std::string jobs_file;
+        std::string results_dir = "results";
+        std::string ibm_backend_selection = "shortest_queue";
+        int ibm_min_qubits = 20;
+        int n_frontier_points = 20;
+        int timeout_seconds = 120;
+    };
+    
+    std::vector<QuantumSolverEntry> quantum_solvers;
     
     /**
      * @brief Load complete configuration from JSON file

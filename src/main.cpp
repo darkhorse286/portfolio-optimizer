@@ -20,6 +20,7 @@
 #include <exception>
 #include <iomanip>
 #include <chrono>
+#include <numeric>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -38,8 +39,14 @@ void print_usage(const char *program_name)
               << "Options:\n"
               << "  --config PATH         Path to configuration JSON file (required)\n"
               << "  --output PATH         Path to output directory (default: results/)\n"
+              << "  --results-dir PATH    Alias for --output\n"
               << "  --frontier            Compute efficient frontier\n"
               << "  --benchmark           Run quantum benchmark (MV + SA + Aer QAOA + Aer QAMO)\n"
+              << "  --ibm-benchmark       Submit N rounds of QAOA/QAMO/QAMOO to IBM hardware,\n"
+              << "                        poll until complete, collect results, regenerate report.\n"
+              << "                        Requires IBM_QUANTUM_TOKEN. Config must have solver\n"
+              << "                        entries with backend \"ibm_auto\" in quantum_solvers.\n"
+              << "  --rounds N            Number of IBM submission rounds for --ibm-benchmark (default: 3)\n"
               << "  --verbose             Enable verbose logging\n"
               << "  --help, -h            Show this help message\n"
               << "\nExample:\n"
@@ -76,6 +83,8 @@ struct CommandLineArgs
     bool quantum_submit = false;
     bool quantum_collect = false;
     bool benchmark = false;
+    bool ibm_benchmark = false;
+    int rounds = 3;
 
     static CommandLineArgs parse(int argc, char *argv[])
     {
@@ -93,7 +102,7 @@ struct CommandLineArgs
             {
                 args.config_path = argv[++i];
             }
-            else if (arg == "--output" && i + 1 < argc)
+            else if ((arg == "--output" || arg == "--results-dir") && i + 1 < argc)
             {
                 args.output_dir = argv[++i];
             }
@@ -120,6 +129,14 @@ struct CommandLineArgs
             else if (arg == "--benchmark")
             {
                 args.benchmark = true;
+            }
+            else if (arg == "--ibm-benchmark")
+            {
+                args.ibm_benchmark = true;
+            }
+            else if (arg == "--rounds" && i + 1 < argc)
+            {
+                args.rounds = std::stoi(argv[++i]);
             }
             else
             {
@@ -316,9 +333,10 @@ static void run_quantum_collect(const std::string &output_dir)
 /**
  * @brief Invoke benchmark_viz.py to render comparison_results.json into an HTML report.
  *
- * @param output_dir Directory containing comparison_results.json and receiving outputs.
+ * @param output_dir     Directory containing comparison_results.json and receiving outputs.
+ * @param config_version Config version tag; passed as --config-version to filter archives.
  */
-static void run_benchmark_viz(const std::string &output_dir)
+static void run_benchmark_viz(const std::string &output_dir, const std::string &config_version)
 {
     if (!python3_available())
     {
@@ -330,7 +348,8 @@ static void run_benchmark_viz(const std::string &output_dir)
     std::string comparison_file = output_dir + "/comparison_results.json";
     std::string cmd = get_python_executable() + " scripts/quantum/benchmark_viz.py"
                       " --comparison-file \"" + comparison_file + "\""
-                      " --output-dir \"" + output_dir + "\"";
+                      " --output-dir \"" + output_dir + "\""
+                      " --config-version " + config_version;
     int rc = std::system(cmd.c_str());
     if (rc == 0)
     {
@@ -340,6 +359,342 @@ static void run_benchmark_viz(const std::string &output_dir)
     {
         std::cerr << "Warning: benchmark_viz.py exited with code " << rc << ".\n";
     }
+}
+
+struct IbmRoundMetadata
+{
+    int         circuit_depth = 0;
+    std::string calibration_date;
+    std::string submitted_at;
+    std::string execution_backend;
+    std::string signal_quality;
+    std::string error_mitigation_method;
+    std::string convergence_info;
+};
+
+/**
+ * @brief Submit N rounds of IBM quantum solvers, collect results, and regenerate the report.
+ *
+ * Uses solver entries with backend "ibm_auto" from config.quantum_solvers.
+ * Requires IBM_QUANTUM_TOKEN to be set in the environment.
+ *
+ * @param config      Loaded portfolio configuration.
+ * @param data        Market data already loaded and filtered.
+ * @param output_dir  Directory for results and report outputs.
+ * @param rounds      Number of direct IBM hardware calls per solver.
+ */
+static void run_ibm_benchmark(
+    const portfolio::PortfolioConfig &config,
+    const portfolio::MarketData &data,
+    const std::string &output_dir,
+    int rounds)
+{
+    const char *token = std::getenv("IBM_QUANTUM_TOKEN");
+    if (!token || std::string(token).empty())
+    {
+        std::cerr << "Error: IBM_QUANTUM_TOKEN is not set. "
+                  << "--ibm-benchmark requires IBM Quantum access.\n";
+        return;
+    }
+
+    std::vector<portfolio::PortfolioConfig::QuantumSolverEntry> ibm_entries;
+    for (const auto &e : config.quantum_solvers)
+    {
+        if (e.backend == "ibm_auto")
+            ibm_entries.push_back(e);
+    }
+
+    if (ibm_entries.empty())
+    {
+        std::cerr << "No IBM solver entries found (backend: \"ibm_auto\"). "
+                  << "Add them to quantum_solvers in the config before running --ibm-benchmark.\n";
+        return;
+    }
+
+    std::filesystem::create_directories(output_dir);
+
+    // Remove stale IBM jobs files from prior runs
+    for (const auto &entry : ibm_entries)
+    {
+        std::filesystem::remove(
+            output_dir + "/" + std::filesystem::path(entry.jobs_file).filename().string());
+    }
+
+    // Build a single point-in-time problem from the most recent lookback window.
+    // Each IBM solver is called exactly 'rounds' times against this one problem,
+    // rather than once per rebalancing step across a full historical backtest.
+    auto backtest_params = portfolio::backtest::BacktestParams::from_config(config);
+    Eigen::MatrixXd all_returns = data.calculate_returns();
+    int n_rows    = static_cast<int>(all_returns.rows());
+    int start_row = std::max(0, n_rows - backtest_params.lookback_window);
+    Eigen::MatrixXd window = all_returns.block(
+        start_row, 0, n_rows - start_row, static_cast<int>(all_returns.cols()));
+
+    Eigen::VectorXd expected = window.colwise().mean() * 252.0;
+    auto risk_model = portfolio::risk::RiskModelFactory::create(config.risk_model);
+    Eigen::MatrixXd cov = risk_model->estimate_covariance(window) * 252.0;
+    const auto &constraints = backtest_params.constraints;
+
+    std::cout << "Running IBM benchmark (" << rounds << " rounds)...\n";
+    std::cout << "  IBM solvers:\n";
+    for (const auto &e : ibm_entries)
+        std::cout << "    - " << e.name << "\n";
+
+    auto now = std::time(nullptr);
+    std::ostringstream run_id_ss;
+    run_id_ss << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
+
+    nlohmann::json j;
+    j["schema_version"] = "1.0";
+    j["run_id"]         = run_id_ss.str();
+    j["problem_sizes"]  = nlohmann::json::array({ static_cast<int>(data.num_assets()) });
+    j["runs"]           = nlohmann::json::array();
+
+    // Classical baseline — single point-in-time evaluation for comparison ratio
+    double classical_sharpe = 1.0;
+    {
+        portfolio::optimizer::MeanVarianceOptimizer mv(
+            portfolio::optimizer::ObjectiveType::MAX_SHARPE,
+            config.optimizer.risk_free_rate);
+        Eigen::VectorXd zero_w = Eigen::VectorXd::Zero(static_cast<int>(data.num_assets()));
+        try
+        {
+            auto mv_res = mv.optimize(expected, cov, constraints, zero_w);
+            if (mv_res.success)
+            {
+                const Eigen::VectorXd &w = mv_res.weights;
+                double port_return = w.dot(expected);
+                double port_vol    = std::sqrt(w.dot(cov * w));
+                classical_sharpe   = (port_vol > 0.0)
+                    ? (port_return - config.optimizer.risk_free_rate) / port_vol
+                    : 0.0;
+
+                nlohmann::json run;
+                run["solver_name"]                          = "markowitz_mv";
+                run["solver_type"]                          = "classical";
+                run["execution_backend"]                    = "osqp";
+                run["problem_size"]                         = static_cast<int>(data.num_assets());
+                run["performance"]["sharpe_ratio"]          = classical_sharpe;
+                run["performance"]["total_return"]          = port_return;
+                run["performance"]["annualized_return"]     = port_return;
+                run["performance"]["annualized_volatility"] = port_vol;
+                run["performance"]["max_drawdown"]          = 0.0;
+                run["solve_time_ms"]                        = 0.0;
+                run["circuit_execution_us"]                 = -1.0;
+                run["solution_quality_vs_classical"]        = 1.0;
+                run["nav_series"]                           = nlohmann::json::array();
+                run["trade_summary"]["rebalance_count"]     = 1;
+                run["trade_summary"]["skipped_rebalances"]  = 0;
+                run["trade_summary"]["turnover"]            = 0.0;
+                run["trade_summary"]["avg_cost_per_trade"]  = 0.0;
+                run["trade_summary"]["total_costs"]         = 0.0;
+                run["tickers"]                              = data.get_tickers();
+                nlohmann::json wa = nlohmann::json::array();
+                for (int i = 0; i < w.size(); ++i) wa.push_back(w[i]);
+                run["avg_weights"]              = wa;
+                run["sector_weights"]           = nlohmann::json::object();
+                run["benchmark_sector_weights"] = nlohmann::json::object();
+                // Note: Classical baseline not added to IBM archive (already in --benchmark archive)
+            }
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Classical baseline failed: " << e.what() << "\n";
+        }
+    }
+
+    // IBM quantum solvers — 'rounds' direct calls each, no backtest loop
+    for (const auto &entry : ibm_entries)
+    {
+        portfolio::quantum::QiskitSolverConfig cfg =
+            portfolio::quantum::QiskitSolverConfig::from_entry(entry);
+        cfg.problem_file = output_dir + "/" +
+            std::filesystem::path(cfg.problem_file).filename().string();
+        cfg.jobs_file = output_dir + "/" +
+            std::filesystem::path(cfg.jobs_file).filename().string();
+        cfg.results_dir = output_dir;
+        auto solver = std::make_shared<portfolio::quantum::QiskitSolver>(cfg);
+
+        std::cout << "  Submitting " << entry.name
+                  << " (" << rounds << " round" << (rounds != 1 ? "s" : "") << ")...\n";
+
+        std::vector<Eigen::VectorXd> all_weights;
+        std::vector<double> solve_times;
+        std::vector<double> circuit_times;
+        std::vector<std::string> signal_qualities;
+        std::string resolved_backend;
+        IbmRoundMetadata latest_metadata;
+
+        for (int r = 0; r < rounds; ++r)
+        {
+            try
+            {
+                Eigen::VectorXd w = solver->optimize(cov, expected, constraints);
+                all_weights.push_back(w);
+                solve_times.push_back(solver->solve_time_ms());
+                circuit_times.push_back(solver->circuit_execution_us());
+                signal_qualities.push_back(solver->signal_quality());
+                if (resolved_backend.empty())
+                    resolved_backend = solver->execution_backend();
+
+                // Overwrite with this round's values; the final iteration gives the most recent round.
+                latest_metadata.execution_backend    = solver->execution_backend();
+                latest_metadata.signal_quality       = solver->signal_quality();
+                latest_metadata.convergence_info     = solver->convergence_info();
+                latest_metadata.error_mitigation_method = "none";
+                {
+                    auto ts_now = std::time(nullptr);
+                    std::ostringstream ts_ss;
+                    ts_ss << std::put_time(std::gmtime(&ts_now), "%Y-%m-%dT%H:%M:%SZ");
+                    latest_metadata.submitted_at = ts_ss.str();
+                }
+
+                std::cout << "    Round " << (r + 1) << "/" << rounds
+                          << " complete (" << solver->solve_time_ms() << " ms)\n";
+            }
+            catch (const std::exception &exc)
+            {
+                std::cerr << "    Round " << (r + 1) << " failed: " << exc.what() << "\n";
+            }
+        }
+
+        double mean_sharpe = 0.0, mean_vol = 0.0, mean_return = 0.0;
+        nlohmann::json avg_weights_arr = nlohmann::json::array();
+        if (!all_weights.empty())
+        {
+            Eigen::VectorXd avg_w = Eigen::VectorXd::Zero(static_cast<int>(data.num_assets()));
+            for (const auto &w : all_weights) avg_w += w;
+            avg_w /= static_cast<double>(all_weights.size());
+
+            mean_return = avg_w.dot(expected);
+            mean_vol    = std::sqrt(avg_w.dot(cov * avg_w));
+            mean_sharpe = (mean_vol > 0.0)
+                ? (mean_return - config.optimizer.risk_free_rate) / mean_vol
+                : 0.0;
+            for (int i = 0; i < avg_w.size(); ++i) avg_weights_arr.push_back(avg_w[i]);
+        }
+
+        auto mean_of = [](const std::vector<double> &v, double dflt = 0.0) {
+            return v.empty() ? dflt
+                : std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+        };
+
+        nlohmann::json run;
+
+        run["solver_name"]                          = entry.name;
+        run["solver_type"]                          = "quantum";
+        run["execution_backend"]                    = latest_metadata.execution_backend.empty()
+                                                        ? solver->execution_backend()
+                                                        : latest_metadata.execution_backend;
+        run["signal_quality"]                       = latest_metadata.signal_quality;
+        run["problem_size"]                         = static_cast<int>(data.num_assets());
+        run["performance"]["sharpe_ratio"]          = mean_sharpe;
+        run["performance"]["total_return"]          = mean_return;
+        run["performance"]["annualized_return"]     = mean_return;
+        run["performance"]["annualized_volatility"] = mean_vol;
+        run["performance"]["max_drawdown"]          = 0.0;
+        run["solve_time_ms"]                        = mean_of(solve_times);
+        run["circuit_execution_us"]                 = mean_of(circuit_times, -1.0);
+        run["solution_quality_vs_classical"]        =
+            (classical_sharpe != 0.0) ? mean_sharpe / classical_sharpe : 0.0;
+        run["nav_series"]                           = nlohmann::json::array();
+        run["trade_summary"]["rebalance_count"]     = static_cast<int>(all_weights.size());
+        run["trade_summary"]["skipped_rebalances"]  = rounds - static_cast<int>(all_weights.size());
+        run["trade_summary"]["turnover"]            = 0.0;
+        run["trade_summary"]["avg_cost_per_trade"]  = 0.0;
+        run["trade_summary"]["total_costs"]         = 0.0;
+        run["tickers"]                              = data.get_tickers();
+        run["avg_weights"]                          = avg_weights_arr;
+        run["sector_weights"]                       = nlohmann::json::object();
+        run["benchmark_sector_weights"]             = nlohmann::json::object();
+        run["rounds_averaged"]                      = rounds;
+        run["circuit_depth"]                        = latest_metadata.circuit_depth;
+        run["backend_calibration_date"]             = latest_metadata.calibration_date;
+        run["completed_at"]                         = latest_metadata.submitted_at;
+        run["error_mitigation_method"]              = latest_metadata.error_mitigation_method;
+        run["convergence_info"]                     = latest_metadata.convergence_info;
+        run["scalar_metadata_source"]               = "most_recent_round";
+        j["runs"].push_back(run);
+    }
+
+    // Merge IBM runs into any existing comparison_results.json (e.g., from --benchmark).
+    // This preserves nav_series data from full backtest runs so equity curve charts
+    // remain visible when --benchmark and --ibm-benchmark are run together.
+    std::string comparison_path = output_dir + "/comparison_results.json";
+    nlohmann::json output_json = j;
+    {
+        std::ifstream existing_file(comparison_path);
+        if (existing_file.good())
+        {
+            try
+            {
+                nlohmann::json prev = nlohmann::json::parse(existing_file);
+                nlohmann::json base_runs = prev.value("runs", nlohmann::json::array());
+
+                // Append IBM runs only when the solver is not already in the base file.
+                // The base file (from --benchmark) has full backtest nav_series; we keep
+                // those and only add genuinely new IBM-hardware entries.
+                for (const auto &ibm_run : j["runs"])
+                {
+                    std::string name = ibm_run.value("solver_name", "");
+                    bool already_present = false;
+                    for (const auto &r : base_runs)
+                    {
+                        if (r.value("solver_name", "") == name)
+                        {
+                            already_present = true;
+                            break;
+                        }
+                    }
+                    if (!already_present)
+                        base_runs.push_back(ibm_run);
+                }
+
+                output_json = prev;
+                output_json["runs"]   = base_runs;
+                output_json["run_id"] = j["run_id"];
+                output_json["config_version"] = config.config_version;
+            }
+            catch (const nlohmann::json::exception &)
+            {
+                // Existing file is unreadable — fall back to IBM-only output
+            }
+        }
+    }
+    {
+        std::ofstream out(comparison_path);
+        out << output_json.dump(2);
+    }
+    std::cout << "IBM benchmark results written to: " << comparison_path << "\n";
+
+    std::ostringstream ts;
+    ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
+    std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
+    j["config_version"] = config.config_version;
+    std::cout << "Archiving run with config_version: " << config.config_version << "\n";
+    std::ofstream ts_out(timestamped);
+    ts_out << j.dump(2);  // archive IBM-only results (not the merged file)
+    ts_out.close();
+    std::cout << "Run archived to " << timestamped << "\n";
+
+    // Confirm job status via qiskit_collect (no-op for already-completed jobs)
+    for (const auto &entry : ibm_entries)
+    {
+        std::string jobs_file = output_dir + "/" +
+            std::filesystem::path(entry.jobs_file).filename().string();
+        if (!std::filesystem::exists(jobs_file))
+            continue;
+        std::string collect_cmd =
+            get_python_executable() + " scripts/quantum/qiskit_collect.py"
+            " --jobs-file \"" + jobs_file + "\""
+            " --results-dir \"" + output_dir + "\""
+            " --timeout-min 120"
+            " --poll-interval 30";
+        std::cout << "Confirming job status for " << entry.name << "...\n";
+        std::system(collect_cmd.c_str());
+    }
+
+    run_benchmark_viz(output_dir, config.config_version);
 }
 
 /**
@@ -359,10 +714,13 @@ static void run_benchmark(
     // Remove stale jobs files so this run starts with a clean slate.
     // Without this, every previous failed/successful job accumulates in the file
     // and collect re-processes them all on each rebalancing period.
-    std::filesystem::remove(output_dir + "/quantum_jobs_qaoa.json");
-    std::filesystem::remove(output_dir + "/quantum_jobs_qaoa_informed.json");
-    std::filesystem::remove(output_dir + "/quantum_jobs_qamo.json");
-    std::filesystem::remove(output_dir + "/quantum_jobs_qamo_informed.json");
+    // Skip ibm_auto entries — those are only used by --ibm-benchmark.
+    for (const auto& entry : config.quantum_solvers) {
+        if (entry.backend == "ibm_auto")
+            continue;
+        std::filesystem::remove(
+            output_dir + "/" + std::filesystem::path(entry.jobs_file).filename().string());
+    }
 
     auto backtest_params = portfolio::backtest::BacktestParams::from_config(config);
 
@@ -379,7 +737,7 @@ static void run_benchmark(
     auto sa_solver = std::make_shared<portfolio::quantum::SimulatedAnnealingSolver>(sa_config);
     runner.add_quantum_solver("sa_classical", "quantum_inspired", sa_solver);
 
-    // Quantum — QAOA on Aer simulator
+    // Quantum solvers — config-driven registration
     // Preflight: verify qiskit is importable before registering the solver.
     // Without this, a missing qiskit produces one error per rebalancing day.
     bool qiskit_ok = std::system(
@@ -388,69 +746,22 @@ static void run_benchmark(
     {
         std::cerr << "Warning: 'qiskit' not found in Python environment ("
                   << get_python_executable() << "). "
-                  << "Skipping qaoa_p1_aer_simulator solver. "
+                  << "Skipping quantum solvers. "
                   << "Ensure the venv is activated and requirements are installed.\n";
     }
     else
     {
-        // num_bits_per_asset=2 keeps the circuit at 10×2=20 qubits (16 MB statevector).
-        // The default of 4 bits produces 40 qubits (16 TB), which is not simulable locally.
-
-        // QAOA uninformed — raw QUBO Q matrix, no market data augmentation
-        portfolio::quantum::QiskitSolverConfig qaoa_cfg;
-        qaoa_cfg.backend               = "aer_simulator";
-        qaoa_cfg.algorithm_mode        = "qaoa";
-        qaoa_cfg.augment_problem_data  = false;
-        qaoa_cfg.qaoa_depth            = 1;
-        qaoa_cfg.shots                 = 1024;
-        qaoa_cfg.problem_file          = output_dir + "/quantum_problem_qaoa.json";
-        qaoa_cfg.jobs_file             = output_dir + "/quantum_jobs_qaoa.json";
-        qaoa_cfg.results_dir           = output_dir;
-        qaoa_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qaoa_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_cfg);
-        runner.add_quantum_solver("QAOA Uninformed (Aer)", "quantum", qaoa_solver);
-
-        // QAOA informed — augmented with EWMA expected_returns and covariance
-        portfolio::quantum::QiskitSolverConfig qaoa_informed_cfg;
-        qaoa_informed_cfg.backend              = "aer_simulator";
-        qaoa_informed_cfg.algorithm_mode       = "qaoa";
-        qaoa_informed_cfg.augment_problem_data = true;
-        qaoa_informed_cfg.qaoa_depth           = 1;
-        qaoa_informed_cfg.shots                = 1024;
-        qaoa_informed_cfg.problem_file         = output_dir + "/quantum_problem_qaoa_informed.json";
-        qaoa_informed_cfg.jobs_file            = output_dir + "/quantum_jobs_qaoa_informed.json";
-        qaoa_informed_cfg.results_dir          = output_dir;
-        qaoa_informed_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qaoa_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qaoa_informed_cfg);
-        runner.add_quantum_solver("QAOA Informed (Aer)", "quantum", qaoa_informed_solver);
-
-        // QAMO uninformed
-        portfolio::quantum::QiskitSolverConfig qamo_cfg;
-        qamo_cfg.backend               = "aer_simulator";
-        qamo_cfg.algorithm_mode        = "qamo";
-        qamo_cfg.augment_problem_data  = false;
-        qamo_cfg.qaoa_depth            = 1;
-        qamo_cfg.shots                 = 1024;
-        qamo_cfg.problem_file          = output_dir + "/quantum_problem_qamo.json";
-        qamo_cfg.jobs_file             = output_dir + "/quantum_jobs_qamo.json";
-        qamo_cfg.results_dir           = output_dir;
-        qamo_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qamo_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_cfg);
-        runner.add_quantum_solver("QAMO Uninformed (Aer)", "quantum", qamo_solver);
-
-        // QAMO informed — current production behavior
-        portfolio::quantum::QiskitSolverConfig qamo_informed_cfg;
-        qamo_informed_cfg.backend              = "aer_simulator";
-        qamo_informed_cfg.algorithm_mode       = "qamo";
-        qamo_informed_cfg.augment_problem_data = true;
-        qamo_informed_cfg.qaoa_depth           = 1;
-        qamo_informed_cfg.shots                = 1024;
-        qamo_informed_cfg.problem_file         = output_dir + "/quantum_problem_qamo_informed.json";
-        qamo_informed_cfg.jobs_file            = output_dir + "/quantum_jobs_qamo_informed.json";
-        qamo_informed_cfg.results_dir          = output_dir;
-        qamo_informed_cfg.params["num_bits_per_asset"] = 2.0;
-        auto qamo_informed_solver = std::make_shared<portfolio::quantum::QiskitSolver>(qamo_informed_cfg);
-        runner.add_quantum_solver("QAMO Informed (Aer)", "quantum", qamo_informed_solver);
+        for (const auto& entry : config.quantum_solvers) {
+            // ibm_auto solvers are reserved for --ibm-benchmark; skip them here.
+            if (entry.backend == "ibm_auto")
+                continue;
+            portfolio::quantum::QiskitSolverConfig cfg = portfolio::quantum::QiskitSolverConfig::from_entry(entry);
+            cfg.problem_file = output_dir + "/" + std::filesystem::path(cfg.problem_file).filename().string();
+            cfg.jobs_file = output_dir + "/" + std::filesystem::path(cfg.jobs_file).filename().string();
+            cfg.results_dir = output_dir;
+            auto solver = std::make_shared<portfolio::quantum::QiskitSolver>(cfg);
+            runner.add_quantum_solver(entry.name, "quantum", solver);
+        }
     }
 
     std::cout << "Running benchmark...\n";
@@ -470,12 +781,15 @@ static void run_benchmark(
     std::ostringstream ts;
     ts << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
     std::string timestamped = output_dir + "/comparison_results_" + ts.str() + ".json";
+    nlohmann::json archive_json = nlohmann::json::parse(json_output);
+    archive_json["config_version"] = config.config_version;
+    std::cout << "Archiving run with config_version: " << config.config_version << "\n";
     std::ofstream ts_out(timestamped);
-    ts_out << json_output;
+    ts_out << archive_json.dump(2);
     ts_out.close();
     std::cout << "Run archived to " << timestamped << "\n";
 
-    run_benchmark_viz(output_dir);
+    run_benchmark_viz(output_dir, config.config_version);
 }
 
 /**
@@ -735,6 +1049,11 @@ int run(const CommandLineArgs &args)
         if (args.benchmark)
         {
             run_benchmark(config, data, args.output_dir);
+        }
+
+        if (args.ibm_benchmark)
+        {
+            run_ibm_benchmark(config, data, args.output_dir, args.rounds);
         }
 
         return 0;

@@ -8,10 +8,11 @@
 #include "optimizer/optimizer_interface.hpp"
 #include "quantum/quantum_optimizer.hpp"
 #include "quantum/qubo_formulation.hpp"
-#include <nlohmann/json.hpp>
+#include "data/data_loader.hpp"
+#include <string>
 #include <map>
 #include <mutex>
-#include <string>
+#include <nlohmann/json.hpp>
 #include <sys/types.h>
 #include <cstdio>
 
@@ -26,8 +27,10 @@ namespace portfolio
          */
         struct QiskitSolverConfig
         {
+            std::string name = "";          // Display name for benchmark runner registration
             std::string backend = "aer_simulator";
             std::string algorithm_mode = "qaoa";  // "qaoa" | "qamo"
+            int optimization_level = 1;    // Qiskit transpilation optimization level (0-3)
             int qaoa_depth = 1;
             int shots = 1024;
             std::string problem_file = "results/quantum_problem.json";
@@ -40,6 +43,9 @@ namespace portfolio
                                               // in the problem file with values computed from
                                               // historical prices before circuit submission.
                                               // Enables informed quantum optimization.
+            std::string ibm_backend_selection = "shortest_queue";
+            int ibm_min_qubits = 20;
+            int n_frontier_points = 20;
             std::map<std::string, double> params;
 
             /**
@@ -48,6 +54,7 @@ namespace portfolio
              * @return QiskitSolverConfig
              */
             static QiskitSolverConfig from_json(const nlohmann::json &j);
+            static QiskitSolverConfig from_entry(const PortfolioConfig::QuantumSolverEntry& e);
         };
 
         /**
@@ -71,6 +78,7 @@ namespace portfolio
             std::string convergence_info() const override;
             std::string solver_name() const override;
             std::string execution_backend() const override;
+            std::string signal_quality() const;
 
         private:
             QiskitSolverConfig config_;
@@ -78,6 +86,8 @@ namespace portfolio
             double last_circuit_execution_us_ = -1.0;
             std::string last_convergence_info_;
             std::string last_job_id_;
+            std::string last_execution_backend_;
+            std::string last_signal_quality_;
 
             void write_problem_file(const QUBOFormulation &qubo) const;
             Eigen::VectorXd read_result_file();

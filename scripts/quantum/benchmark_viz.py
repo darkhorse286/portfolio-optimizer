@@ -79,6 +79,13 @@ WALK_FORWARD_SOLVER_NAMES: set[str] = {
 _LEGACY_AER_SOLVER_NAMES: set[str] = {
     "qaoa_p1_aer_simulator",
     "qamo_p1_aer_simulator",
+    # Old QAMOO naming scheme from pre-Phase-5 result files.
+    # These are used only as frontier_points sources; never inject as solver rows.
+    "qamoo_20pts_aer_simulator",
+    "qamoo_5pts_ibm_fez",
+    "qamoo_20pts_ibm_fez",
+    "qamoo_20pts_ibm_kingston",
+    "qamoo_20pts_ibm_marrakesh",
 }
 
 
@@ -340,6 +347,12 @@ def _try_augment_runs_from_result_files(
         solver_name = qr.get("solver_name", "")
         backend = qr.get("execution_backend", "")
 
+        # Hard guard: skip any IBM QAMOO results — they are stale baseline artifacts
+        solver_name_lower = solver_name.lower()
+        if "qamoo" in solver_name_lower and backend.startswith("ibm_"):
+            print(f"  SKIP: blocking stale IBM QAMOO injection ({solver_name})")
+            continue
+
         # Case 1: merge Phase 4 metadata into an existing matching run
         for run in runs:
             if run.get("solver_name") == solver_name:
@@ -352,9 +365,13 @@ def _try_augment_runs_from_result_files(
                     "top_bitstring_fraction",
                     "metadata_key_used",
                     "physical_qubits",
+                    "rounds_averaged",
                 ):
-                    if key in qr and key not in run:
+                    if key in qr and not run.get(key):
                         run[key] = qr[key]
+                # Resolve "ibm_auto" to the actual backend from the result file
+                if qr.get("execution_backend") and run.get("execution_backend") == "ibm_auto":
+                    run["execution_backend"] = qr["execution_backend"]
 
         # Accumulate Case 2 candidates — skip legacy/walk-forward names and
         # solvers already present in comparison_results.json.
@@ -441,6 +458,7 @@ def _try_augment_runs_from_result_files(
             "metadata_key_used": qr.get("metadata_key_used", "unavailable"),
             "completed_at": qr.get("completed_at", ""),
             "_hardware_only": not has_full_backtest,
+            "_synthetic_nav": True,  # Mark quantum_result injections as synthetic so they render dashed
         }
         if trade_summary is not None:
             injected["trade_summary"] = trade_summary
@@ -481,6 +499,28 @@ def _fill_solution_quality(runs: List[Dict[str, Any]]) -> None:
             run["solution_quality_vs_classical"] = sharpe / classical_sharpe
 
 
+def _fill_synthetic_nav_for_runs(
+    runs: List[Dict[str, Any]],
+    prices_csv: Path,
+    risk_free_rate: float = 0.02,
+) -> None:
+    """Compute buy-and-hold NAV series for runs with avg_weights but empty nav_series."""
+    for run in runs:
+        if run.get("nav_series"):
+            continue
+        weights = run.get("avg_weights", [])
+        tickers = run.get("tickers", [])
+        if not weights or not tickers or len(weights) != len(tickers):
+            continue
+        result = _compute_static_portfolio_metrics(weights, tickers, prices_csv, risk_free_rate)
+        if result is None:
+            continue
+        perf, nav_series = result
+        run["nav_series"] = nav_series
+        run["performance"] = perf
+        run["_synthetic_nav"] = True
+
+
 def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) -> None:
     """Plot normalized equity curves for all solvers.
 
@@ -509,7 +549,13 @@ def plot_comparison_equity_curves(runs: List[Dict[str, Any]], output_path: str) 
         if nav_values:
             first_nav = nav_values[0]
             normalized = [v / first_nav for v in nav_values]
-            plt.plot(x_axis, normalized, label=_display_name(solver_name), color=_solver_color(run))
+            is_synthetic = run.get("_synthetic_nav", False)
+            plt.plot(
+                x_axis, normalized,
+                label=_display_name(solver_name),
+                color=_solver_color(run),
+                linestyle="--" if is_synthetic else "-",
+            )
 
     plt.xlabel("Date")
     plt.ylabel("Portfolio Value (Normalized to 1.0)")
@@ -899,7 +945,7 @@ def _format_currency(value: Any) -> str:
         return "n/a"
 
 
-def _build_agg_rows(results_dir: Path) -> List[Dict[str, Any]]:
+def _build_agg_rows(results_dir: Path, config_version: str | None = None) -> List[Dict[str, Any]]:
     """Return per-solver aggregate stats for the HTML report section.
 
     Source 1: timestamped comparison_results_[0-9]*.json archives (walk-forward Aer).
@@ -917,8 +963,8 @@ def _build_agg_rows(results_dir: Path) -> List[Dict[str, Any]]:
         return []
 
     # --- Part 1: walk-forward results from timestamped archives ---
-    files = discover_files(results_dir)
-    by_solver: Dict[str, List[Dict[str, Any]]] = load_runs(files) if files else {}
+    files = discover_files(results_dir, config_version)
+    by_solver: Dict[str, List[Dict[str, Any]]] = load_runs(files, config_version) if files else {}
     # Snapshot names from archives so Part 2 can skip them without also
     # blocking accumulation of multiple files for the same IBM solver.
     archive_solvers: set[str] = set(by_solver.keys())
@@ -1037,6 +1083,7 @@ def build_quantum_report(
     frontier_classical_csv: Optional[str] = None,
     frontier_qamoo_result: Optional[Dict[str, Any]] = None,
     agg_rows: Optional[List[Dict[str, Any]]] = None,
+    has_synthetic_nav: bool = False,
 ) -> None:
     """Build self-contained HTML report.
 
@@ -1247,16 +1294,50 @@ def build_quantum_report(
         sq = metrics.get("signal_quality", "")
         if sq == "low":
             has_low_signal = True
+
+        circuit_depth = (
+            metrics.get("circuit_depth")
+            or metrics.get("avg_circuit_depth")
+            or "N/A"
+        )
+        calibration_date = (
+            metrics.get("backend_calibration_date")
+            or metrics.get("calibration_date")
+            or "N/A"
+        )
         completed = metrics.get("completed_at", "")
         submitted_display = completed[:10] if completed else "N/A"
+        signal_quality = (
+            metrics.get("signal_quality")
+            or "low — results may be noise-dominated"
+        )
+        error_mitigation = (
+            metrics.get("error_mitigation_method")
+            or "none"
+        )
+        rounds_averaged = metrics.get("rounds_averaged", "N/A")
+        if isinstance(rounds_averaged, int):
+            rounds_display = f"{rounds_averaged} rounds averaged"
+        else:
+            rounds_display = "—"
+
+        if metrics.get("scalar_metadata_source") == "most_recent_round":
+            circuit_depth_display = (
+                f'<span title="From most recent of {rounds_averaged} rounds">'
+                f'{circuit_depth}</span>'
+            )
+        else:
+            circuit_depth_display = str(circuit_depth)
+
         hw_rows.append([
             _display_name(solver),
             metrics.get("execution_backend", ""),
-            str(metrics.get("circuit_depth", "N/A")),
-            metrics.get("backend_calibration_date", "N/A"),
-            metrics.get("error_mitigation_method", "N/A"),
-            "ok" if sq == "ok" else ("low — results may be noise-dominated" if sq == "low" else sq or "N/A"),
+            circuit_depth_display,
+            calibration_date,
+            error_mitigation,
+            signal_quality,
             submitted_display,
+            rounds_display,
         ])
 
     has_agg = bool(agg_rows)
@@ -1356,6 +1437,15 @@ def build_quantum_report(
         <strong>Notice:</strong> One or more IBM hardware results show low signal quality
         (top bitstring &lt; 5% of shots). These results reflect current NISQ hardware noise
         rather than algorithmic performance. Aer simulation results provide the noise-free baseline.
+    </div>
+    {% endif %}
+
+    {% if has_synthetic_nav %}
+    <div class="callout">
+        <strong>Notice:</strong> IBM hardware solvers produced a single set of optimized weights
+        rather than a full walk-forward backtest. Their equity curves (shown as dashed lines) are
+        computed by holding those weights constant over the entire backtest period.
+        Solid lines represent monthly rebalanced walk-forward backtests.
     </div>
     {% endif %}
 
@@ -1495,6 +1585,7 @@ def build_quantum_report(
                     <th>Error Mitigation</th>
                     <th>Signal Quality</th>
                     <th>Submitted</th>
+                    <th>Rounds Averaged</th>
                 </tr>
             </thead>
             <tbody>
@@ -1502,11 +1593,12 @@ def build_quantum_report(
                 <tr>
                     <td>{{ row[0] }}</td>
                     <td>{{ row[1] }}</td>
-                    <td>{{ row[2] }}</td>
+                    <td>{{ row[2] | safe }}</td>
                     <td>{{ row[3] }}</td>
                     <td>{{ row[4] }}</td>
                     <td>{{ row[5] }}</td>
                     <td>{{ row[6] }}</td>
+                    <td>{{ row[7] }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -1608,6 +1700,7 @@ def build_quantum_report(
         has_ibm_runs=has_ibm_runs,
         hw_rows=hw_rows,
         has_low_signal=has_low_signal,
+        has_synthetic_nav=has_synthetic_nav,
         has_frontier=has_frontier,
         frontier_data_uri=frontier_data_uri,
         frontier_summary=frontier_summary,
@@ -1646,6 +1739,11 @@ def main() -> None:
         default=None,
         help="Path to QAMOO result JSON for frontier comparison.",
     )
+    parser.add_argument(
+        "--config-version",
+        default=None,
+        help="Only aggregate archive files with this config_version tag.",
+    )
 
     args = parser.parse_args()
 
@@ -1656,12 +1754,31 @@ def main() -> None:
     runs = data.get("runs", [])
 
     # Augment runs with Phase 4 fields from quantum_result_*.json files
-    _try_augment_runs_from_result_files(runs, args.output_dir)
+    # Skip for improved config runs — IBM results are already in the archive
+    if data.get("config_version") != "improved":
+        _try_augment_runs_from_result_files(runs, args.output_dir)
 
     # Convert C++ dict-format sector_weights to list format with return values
     _augment_cpp_sector_data(runs)
 
     # Fill any missing solution_quality_vs_classical values from Sharpe ratios
+    _fill_solution_quality(runs)
+
+    # Compute buy-and-hold equity curves for IBM runs that have weights but no nav_series
+    _repo_root = Path(__file__).resolve().parent.parent.parent
+    _prices_csv = _repo_root / "data" / "market" / "historical_prices.csv"
+    _risk_free_rate = 0.02
+    _cfg_path = _repo_root / "data" / "config" / "portfolio_config.json"
+    if _cfg_path.exists():
+        try:
+            with _cfg_path.open() as _f:
+                _cfg = json.load(_f)
+            _risk_free_rate = float(_cfg.get("optimizer", {}).get("risk_free_rate", 0.02))
+        except Exception:
+            pass
+    _fill_synthetic_nav_for_runs(runs, _prices_csv, _risk_free_rate)
+
+    # Update solution_quality now that synthetic NAV has populated performance metrics
     _fill_solution_quality(runs)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1677,9 +1794,14 @@ def main() -> None:
     classical_csv = args.frontier_classical
     quantum_json = args.frontier_quantum
     if classical_csv is None:
-        default_cls = args.output_dir.parent / "results" / "efficient_frontier.csv"
-        if default_cls.exists():
-            classical_csv = default_cls
+        for _candidate in [
+            args.output_dir / "efficient_frontier.csv",
+            args.output_dir.parent / "results" / "efficient_frontier.csv",
+            args.output_dir.parent / "efficient_frontier.csv",
+        ]:
+            if _candidate.exists():
+                classical_csv = _candidate
+                break
     if quantum_json is None:
         # Scan for any quantum_result file that contains frontier_points;
         # pick the most recent by submitted_at, falling back to filename.
@@ -1716,11 +1838,13 @@ def main() -> None:
     # Group metrics by solver
     metrics_by_solver = {run["solver_name"]: run for run in runs}
 
+    has_synthetic_nav = any(run.get("_synthetic_nav") for run in runs)
+
     # Aggregate stats across timestamped run archives
-    agg_rows = _build_agg_rows(args.output_dir)
+    agg_rows = _build_agg_rows(args.output_dir, args.config_version)
     if agg_rows:
         print(f"Aggregated {sum(r['num_runs'] for r in agg_rows)} solver-run(s) "
-              f"across {len(discover_files(args.output_dir))} archive file(s).")
+              f"across {len(discover_files(args.output_dir, args.config_version))} archive file(s).")
 
     # Build HTML
     html_path = args.output_dir / "quantum_report.html"
@@ -1734,6 +1858,7 @@ def main() -> None:
         frontier_classical_csv=str(classical_csv) if classical_csv else None,
         frontier_qamoo_result=qamoo_result,
         agg_rows=agg_rows,
+        has_synthetic_nav=has_synthetic_nav,
     )
 
     print(f"Wrote report to: {html_path}")
